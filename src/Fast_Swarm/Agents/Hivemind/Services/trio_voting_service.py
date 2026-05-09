@@ -16,7 +16,7 @@ Flow:
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -242,7 +242,9 @@ async def aggregate_hivemind_votes(
         HivemindDecision with aggregated vote
     """
     # Get coach for Kelly fraction and ELO
-    result = await session.exec(select(Coach).where(Coach.coach_id == coach_id))
+    result = await session.exec(
+        select(Coach).where(Coach.coach_id == coach_id)
+    )
     coach = result.first()
 
     if not coach:
@@ -529,7 +531,9 @@ async def close_trade_leg(
     Returns:
         Updated TradeLeg record
     """
-    result = await session.exec(select(TradeLeg).where(TradeLeg.leg_id == leg_id))
+    result = await session.exec(
+        select(TradeLeg).where(TradeLeg.leg_id == leg_id)
+    )
     leg = result.first()
 
     if not leg:
@@ -549,7 +553,7 @@ async def close_trade_leg(
     leg.close_candle_idx = candle_idx
     leg.pnl_pct = Decimal(str(pnl_pct))
     leg.is_closed = True
-    leg.closed_at = datetime.now(UTC)
+    leg.closed_at = datetime.utcnow()
 
     session.add(leg)
     await session.commit()

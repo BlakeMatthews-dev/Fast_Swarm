@@ -39,63 +39,17 @@ from .elo_transfer_service import apply_clone_bonus, apply_death_elo, apply_spaw
 # =============================================================================
 
 COACH_ADJECTIVES = [
-    "Bold",
-    "Swift",
-    "Calm",
-    "Fierce",
-    "Wise",
-    "Sharp",
-    "Quick",
-    "Steady",
-    "Cunning",
-    "Patient",
-    "Brave",
-    "Clever",
-    "Silent",
-    "Keen",
-    "Agile",
-    "Ruthless",
-    "Prudent",
-    "Fearless",
-    "Cautious",
-    "Relentless",
-    "Stoic",
-    "Vigilant",
-    "Tenacious",
-    "Shrewd",
-    "Astute",
-    "Resolute",
-    "Nimble",
+    "Bold", "Swift", "Calm", "Fierce", "Wise", "Sharp", "Quick", "Steady",
+    "Cunning", "Patient", "Brave", "Clever", "Silent", "Keen", "Agile",
+    "Ruthless", "Prudent", "Fearless", "Cautious", "Relentless", "Stoic",
+    "Vigilant", "Tenacious", "Shrewd", "Astute", "Resolute", "Nimble",
 ]
 
 COACH_NOUNS = [
-    "Wolf",
-    "Hawk",
-    "Bear",
-    "Fox",
-    "Lion",
-    "Eagle",
-    "Tiger",
-    "Shark",
-    "Viper",
-    "Falcon",
-    "Panther",
-    "Cobra",
-    "Raven",
-    "Lynx",
-    "Orca",
-    "Mantis",
-    "Scorpion",
-    "Phoenix",
-    "Dragon",
-    "Sphinx",
-    "Griffin",
-    "Hydra",
-    "Kraken",
-    "Chimera",
-    "Basilisk",
-    "Wyvern",
-    "Leviathan",
+    "Wolf", "Hawk", "Bear", "Fox", "Lion", "Eagle", "Tiger", "Shark",
+    "Viper", "Falcon", "Panther", "Cobra", "Raven", "Lynx", "Orca",
+    "Mantis", "Scorpion", "Phoenix", "Dragon", "Sphinx", "Griffin",
+    "Hydra", "Kraken", "Chimera", "Basilisk", "Wyvern", "Leviathan",
 ]
 
 
@@ -183,7 +137,7 @@ async def select_templates_weighted(
 
     # Weighted random selection without replacement
     selected = []
-    available = list(zip(templates, weights, strict=False))
+    available = list(zip(templates, weights))
 
     for _ in range(count):
         if not available:
@@ -376,7 +330,9 @@ async def clone_coach(
 
     # Copy parent's active roster to child
     parent_roster_result = await session.exec(
-        select(AgentInstance).where(AgentInstance.coach_id == parent.coach_id).where(AgentInstance.is_active.is_(True))
+        select(AgentInstance)
+        .where(AgentInstance.coach_id == parent.coach_id)
+        .where(AgentInstance.is_active.is_(True))
     )
     parent_roster = parent_roster_result.all()
 
@@ -423,15 +379,21 @@ async def get_population_stats(session: AsyncSession) -> dict[str, Any]:
         Dict with population metrics
     """
     # Count active coaches
-    active_result = await session.exec(select(func.count(Coach.id)).where(Coach.status == "active"))
+    active_result = await session.exec(
+        select(func.count(Coach.id)).where(Coach.status == "active")
+    )
     active_count = active_result.one()
 
     # Count dead coaches
-    dead_result = await session.exec(select(func.count(Coach.id)).where(Coach.status == "dead"))
+    dead_result = await session.exec(
+        select(func.count(Coach.id)).where(Coach.status == "dead")
+    )
     dead_count = dead_result.one()
 
     # Get ELO distribution
-    elo_result = await session.exec(select(Coach.elo_rating).where(Coach.status == "active"))
+    elo_result = await session.exec(
+        select(Coach.elo_rating).where(Coach.status == "active")
+    )
     elos = [float(e) for e in elo_result.all()]
 
     avg_elo = sum(elos) / len(elos) if elos else COACH_STARTING_ELO
@@ -512,7 +474,9 @@ async def process_coach_death(
     await apply_death_elo(session, coach)
 
     # Get coach's roster
-    roster_result = await session.exec(select(AgentInstance).where(AgentInstance.coach_id == coach.coach_id))
+    roster_result = await session.exec(
+        select(AgentInstance).where(AgentInstance.coach_id == coach.coach_id)
+    )
     roster = roster_result.all()
 
     new_templates = []
@@ -571,7 +535,9 @@ async def check_and_process_clones(
     """
     # Find coaches at or above clone threshold
     result = await session.exec(
-        select(Coach).where(Coach.status == "active").where(Coach.elo_rating >= COACH_CLONE_THRESHOLD)
+        select(Coach)
+        .where(Coach.status == "active")
+        .where(Coach.elo_rating >= COACH_CLONE_THRESHOLD)
     )
     coaches_to_clone = result.all()
 
@@ -601,7 +567,9 @@ async def check_and_process_deaths(
     """
     # Find coaches at or below death threshold
     result = await session.exec(
-        select(Coach).where(Coach.status == "active").where(Coach.elo_rating <= COACH_DEATH_THRESHOLD)
+        select(Coach)
+        .where(Coach.status == "active")
+        .where(Coach.elo_rating <= COACH_DEATH_THRESHOLD)
     )
     coaches_to_kill = result.all()
 
@@ -637,7 +605,9 @@ async def bootstrap_coach_population(
     count = count or COACH_POPULATION_TARGET
 
     # Check if coaches already exist
-    existing_result = await session.exec(select(func.count(Coach.id)).where(Coach.status == "active"))
+    existing_result = await session.exec(
+        select(func.count(Coach.id)).where(Coach.status == "active")
+    )
     existing = existing_result.one()
 
     if existing >= count:

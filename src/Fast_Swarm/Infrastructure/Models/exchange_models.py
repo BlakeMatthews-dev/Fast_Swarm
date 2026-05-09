@@ -99,6 +99,13 @@ class LiveTradeUnified(SQLModel, table=True):
     source_db: str | None = None
     source_table: str | None = None
 
+    # MVP additions for execution tracking
+    order_type: str | None = None  # "market", "limit_buffer"
+    requested_price: Decimal | None = Field(default=None, sa_column=Column(Numeric(18, 8)))  # Price requested (vs fill)
+    slippage_pct: float | None = None  # Actual slippage: (fill - requested) / requested
+    regime: str | None = None  # Market regime at trade time: bull, bear, chop, flat
+    order_id: str | None = None  # Exchange order ID for live trades
+
 
 class AgentTrade(SQLModel, table=True):
     """

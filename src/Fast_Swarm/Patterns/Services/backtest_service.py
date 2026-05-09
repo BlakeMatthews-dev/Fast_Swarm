@@ -285,16 +285,33 @@ class PatternBacktestService:
                         avg_fitness = sum(m.get("fitness_score", 0) for m in metrics_list) / len(metrics_list)
                         total_trades = sum(m.get("total_trades", 0) for m in metrics_list)
                         avg_win_rate = sum(m.get("win_rate", 0) or 0 for m in metrics_list) / len(metrics_list)
+                        # Sharpe
                         avg_sharpe_vals = [
                             m.get("sharpe_ratio") for m in metrics_list if m.get("sharpe_ratio") is not None
                         ]
                         avg_sharpe = sum(avg_sharpe_vals) / len(avg_sharpe_vals) if avg_sharpe_vals else None
+                        # Sortino
+                        avg_sortino_vals = [
+                            m.get("sortino_ratio") for m in metrics_list if m.get("sortino_ratio") is not None
+                        ]
+                        avg_sortino = sum(avg_sortino_vals) / len(avg_sortino_vals) if avg_sortino_vals else None
+                        # Calmar
+                        avg_calmar_vals = [
+                            m.get("calmar_ratio") for m in metrics_list if m.get("calmar_ratio") is not None
+                        ]
+                        avg_calmar = sum(avg_calmar_vals) / len(avg_calmar_vals) if avg_calmar_vals else None
+                        # Max drawdown (worst across windows)
+                        max_dd_vals = [m.get("max_drawdown_pct", 0) or 0 for m in metrics_list]
+                        max_dd = max(max_dd_vals) if max_dd_vals else 0.0
 
                         fitness_by_regime[regime] = {
                             "fitness": round(avg_fitness, 2),
                             "trades": total_trades,
                             "win_rate": round(avg_win_rate, 4),
                             "sharpe": round(avg_sharpe, 3) if avg_sharpe else None,
+                            "sortino": round(avg_sortino, 3) if avg_sortino else None,
+                            "calmar": round(avg_calmar, 3) if avg_calmar else None,
+                            "max_drawdown": round(max_dd, 2),
                             "windows_tested": len(metrics_list),
                         }
 

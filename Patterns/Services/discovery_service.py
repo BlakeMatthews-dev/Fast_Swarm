@@ -11,9 +11,6 @@ Utilities are now local to Fast_Swarm (no external path dependencies).
 """
 
 # Import local utilities (ported from Coinswarm-1/local-utilities)
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlmodel import select
-
 from Fast_Swarm.utilities import (
     PatternDiscoveryScheduler,
     backtest_pattern_on_windows,
@@ -21,6 +18,8 @@ from Fast_Swarm.utilities import (
     get_prioritized_patterns,
     update_priority_after_backtest,
 )
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 from ..Models.pattern_models import Pattern
 

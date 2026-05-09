@@ -83,7 +83,7 @@ def generate_exit_conditions(entry_conditions: list, traits: "AgentTraits" = Non
             "description": "Move to breakeven after +5%, then trail",
             "breakeven_trigger_pct": 5.0,
             "trail_after_breakeven": 3.0,
-            "traits_match": lambda t: t and hasattr(t, "loss_aversion") and t.loss_aversion > 0.6,
+            "traits_match": lambda t: t and hasattr(t, "risk_tolerance") and t.risk_tolerance < 0.4,
         },
         {
             "strategy": "trailing_3pct",
@@ -579,10 +579,26 @@ def select_patterns_llm(
     # Try to find JSON in response
     import re
 
-    json_match = re.search(r"\{[\s\S]*\}", response)
+    # Strip markdown code block wrappers (```json ... ```)
+    cleaned = response.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+
+    json_match = re.search(r"\{[\s\S]*\}", cleaned)
     if json_match:
         json_str = json_match.group()
-        result = json.loads(json_str)
+        try:
+            result = json.loads(json_str)
+        except json.JSONDecodeError:
+            # Try fixing common LLM JSON issues (trailing commas, single quotes)
+            fixed = re.sub(r",\s*([}\]])", r"\1", json_str)  # Remove trailing commas
+            try:
+                result = json.loads(fixed)
+            except json.JSONDecodeError:
+                print(f"[Genesis:LLM] JSON parse failed even after cleanup: {json_str[:200]}")
+                result = None
+
+    if json_match and result:
         raw_selections = result.get("selections", [])
         philosophy = result.get("philosophy", None)
 

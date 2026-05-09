@@ -111,7 +111,7 @@ def parse_model_response(response: str) -> dict:
                 "reasoning": data.get("reasoning", ""),
                 "expected_rr": float(data.get("expected_rr", 1.0)),
             }
-    except Exception:
+    except:
         pass
 
     # Fallback parsing
@@ -182,11 +182,9 @@ async def test_single_trade(
 async def evaluate_model(
     trades: list[dict],
     model: str,
-    confidence_thresholds: list[float] | None = None,
+    confidence_thresholds: list[float] = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85],
     concurrency: int = 16,
 ) -> dict:
-    if confidence_thresholds is None:
-        confidence_thresholds = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85]
     """Evaluate model across different confidence thresholds."""
     print(f"\n  Testing {len(trades)} signals...")
 

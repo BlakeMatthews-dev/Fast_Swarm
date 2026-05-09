@@ -154,7 +154,7 @@ def get_fitness_impl():
         # Lazy import to avoid circular dependencies
         from Agents.Services import fitness_service_green as impl
     else:
-        from Agents.Services import fitness_service_blue as impl
+        from Agents.Services import fitness_service as impl
     return impl
 
 

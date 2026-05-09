@@ -6,7 +6,6 @@ Source of truth: Master_plan.md (Three-Tier Memory System)
 """
 
 import pytest
-
 from Fast_Swarm.Agents.Models.memory_models import (
     MemoryType,
 )

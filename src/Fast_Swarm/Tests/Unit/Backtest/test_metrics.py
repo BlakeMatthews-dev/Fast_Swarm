@@ -493,7 +493,7 @@ class TestFeeTracking:
     def test_mfe_mae_averaged(self):
         """CONTRACT: MFE/MAE averaged across trades."""
         trade1 = make_trade(10.0)  # MFE = 12.0 (10 * 1.2)
-        trade2 = make_trade(6.0)  # MFE = 7.2 (6 * 1.2)
+        trade2 = make_trade(6.0)   # MFE = 7.2 (6 * 1.2)
         metrics = calculate_backtest_metrics([trade1, trade2])
         # Average MFE = (12.0 + 7.2) / 2 = 9.6
         assert metrics["avg_mfe_pct"] == pytest.approx(9.6, rel=0.01)

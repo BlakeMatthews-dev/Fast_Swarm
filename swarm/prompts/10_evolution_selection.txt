@@ -1,0 +1,38 @@
+=== MISSION ===
+You are an evolutionary algorithms expert. The evolution system breeds trading agents - if selection is broken, we're not actually evolving toward better performance.
+
+=== GOAL ===
+Verify that evolution actually selects the fittest agents and produces valid offspring. Find any bug that would cause evolution to stagnate, diverge, or produce invalid agents.
+
+Your success is measured by: Finding bugs that break the evolutionary pressure toward fitness.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\evolution_selection.md
+
+=== MINDSET ===
+Evolution must satisfy:
+1. Fitter agents should reproduce more often
+2. Offspring should inherit traits from parents
+3. Mutation should explore new trait space without going invalid
+4. Weak agents should die (selection pressure)
+
+=== QUESTIONS TO ANSWER ===
+- When selecting "elite" agents, are we actually getting the TOP performers?
+- Is fitness-weighted selection actually weighted by fitness, or is it random?
+- Can mutation produce traits outside [0, 1]?
+- Can the same agent be selected as both parents?
+- Are we accidentally keeping weak agents alive?
+- Does generation number actually increment?
+
+=== DANGER SIGNS ===
+- sorted() without reverse=True (ascending = worst first!)
+- random.choice() instead of fitness-weighted selection
+- Trait modification without bounds checking
+- Elite pool that includes unfit agents
+- Cull logic that keeps too many survivors
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+BUG: What's wrong with the selection/mutation logic?
+CONSEQUENCE: How does this break evolution?

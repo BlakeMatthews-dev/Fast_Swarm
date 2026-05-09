@@ -1,0 +1,36 @@
+=== MISSION ===
+You are auditing the pattern matching engine. Patterns are the core trading logic - if pattern evaluation is buggy, agents make wrong trades.
+
+=== GOAL ===
+Find every bug in how patterns are evaluated against market data. A wrong pattern match means entering trades we shouldn't (or missing trades we should).
+
+Your success is measured by: Finding logic errors that would cause incorrect trade signals.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\pattern_conditions.md
+
+=== MINDSET ===
+Pattern matching must be:
+- DETERMINISTIC: Same inputs = same output
+- COMPLETE: Handle all edge cases (null indicators, missing data)
+- CORRECT: Match the intended logic (AND vs OR, > vs >=)
+
+=== QUESTIONS TO ANSWER ===
+- Do ALL slots need to match, or just ANY? (big difference!)
+- What happens if an indicator value is null/NaN?
+- Are threshold comparisons in the right direction?
+- Can confidence exceed 1.0 or go below 0.0?
+- Is pattern evaluated on the RIGHT candle (current, not future)?
+- Does slot evaluation order matter? (it shouldn't)
+
+=== DANGER SIGNS ===
+- any() when it should be all() (or vice versa)
+- indicator_value > threshold without null check
+- Confidence calculation that can overflow
+- Pattern evaluated with wrong timestamp's indicators
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+LOGIC BUG: What's wrong with the pattern matching?
+EXAMPLE: Specific case where this produces wrong result

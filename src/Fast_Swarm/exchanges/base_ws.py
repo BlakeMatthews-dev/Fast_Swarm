@@ -149,6 +149,7 @@ class BaseWebSocketClient(ABC):
     PING_INTERVAL: float = 30.0
     RECONNECT_DELAY: float = 5.0
     MAX_RECONNECT_ATTEMPTS: int = 10
+    COOLDOWN_AFTER_MAX_RETRIES: float = 300.0  # 5 min before retrying after exhausting attempts
 
     def __init__(self):
         self.state = ConnectionState.DISCONNECTED
@@ -186,60 +187,89 @@ class BaseWebSocketClient(ABC):
         """Register a callback for kline/candlestick updates."""
         self._kline_callbacks.append(callback)
 
+    COOLDOWN_AFTER_MAX_RETRIES: float = 300.0  # 5 minutes before retrying after exhausting attempts
+
     async def connect(self):
-        """Connect to WebSocket and start message loop."""
+        """Connect to WebSocket and start message loop. Never dies permanently."""
         self._running = True
         self.state = ConnectionState.CONNECTING
 
-        while self._running and self._reconnect_count < self.MAX_RECONNECT_ATTEMPTS:
-            try:
-                async with websockets.connect(
-                    self.WS_URL,
-                    ping_interval=self.PING_INTERVAL,
-                    ping_timeout=10,
-                    close_timeout=5,
-                    max_size=10 * 1024 * 1024,  # 10MB max message size
-                ) as ws:
-                    self.ws = ws
-                    self.state = ConnectionState.CONNECTED
-                    self._reconnect_count = 0
-                    logger.info(
-                        "WebSocket connected",
-                        extra=ctx(LogContext.WS_CONNECTED, exchange=self.EXCHANGE_NAME, url=self.WS_URL),
+        # Outer loop: ensures connection is retried indefinitely (with cooldowns)
+        while self._running:
+            # Inner loop: exponential backoff up to MAX_RECONNECT_ATTEMPTS
+            while self._running and self._reconnect_count < self.MAX_RECONNECT_ATTEMPTS:
+                try:
+                    async with websockets.connect(
+                        self.WS_URL,
+                        ping_interval=self.PING_INTERVAL,
+                        ping_timeout=10,
+                        close_timeout=5,
+                        open_timeout=20,
+                        max_size=10 * 1024 * 1024,  # 10MB max message size
+                    ) as ws:
+                        self.ws = ws
+                        self.state = ConnectionState.CONNECTED
+                        self._reconnect_count = 0
+                        logger.info(
+                            "WebSocket connected to %s",
+                            self.EXCHANGE_NAME,
+                        )
+
+                        # Resubscribe if reconnecting
+                        await self._resubscribe()
+
+                        # Start message loop
+                        await self._message_loop()
+
+                except websockets.ConnectionClosed as e:
+                    logger.warning(
+                        "WebSocket %s closed: %s",
+                        self.EXCHANGE_NAME,
+                        e,
                     )
+                    await self._handle_disconnect()
 
-                    # Resubscribe if reconnecting
-                    await self._resubscribe()
+                except (TimeoutError, asyncio.TimeoutError):
+                    logger.warning(
+                        "WebSocket %s connect timeout (attempt %d/%d)",
+                        self.EXCHANGE_NAME,
+                        self._reconnect_count + 1,
+                        self.MAX_RECONNECT_ATTEMPTS,
+                    )
+                    await self._handle_disconnect()
 
-                    # Start message loop
-                    await self._message_loop()
+                except (OSError, ConnectionError) as e:
+                    logger.warning(
+                        "WebSocket %s network error: %s (attempt %d/%d)",
+                        self.EXCHANGE_NAME,
+                        e,
+                        self._reconnect_count + 1,
+                        self.MAX_RECONNECT_ATTEMPTS,
+                    )
+                    await self._handle_disconnect()
 
-            except websockets.ConnectionClosed as e:
+                except Exception as e:
+                    logger.error(
+                        "WebSocket %s unexpected error: %s",
+                        self.EXCHANGE_NAME,
+                        e,
+                        exc_info=True,
+                    )
+                    await self._handle_disconnect()
+
+            # Exhausted MAX_RECONNECT_ATTEMPTS - cooldown then retry
+            if self._running:
                 logger.warning(
-                    "WebSocket connection closed",
-                    extra=ctx(LogContext.WS_DISCONNECTED, exchange=self.EXCHANGE_NAME, reason=str(e)),
+                    "WebSocket %s: %d attempts exhausted, cooling down %.0fs before retry",
+                    self.EXCHANGE_NAME,
+                    self.MAX_RECONNECT_ATTEMPTS,
+                    self.COOLDOWN_AFTER_MAX_RETRIES,
                 )
-                await self._handle_disconnect()
+                self.state = ConnectionState.RECONNECTING
+                await asyncio.sleep(self.COOLDOWN_AFTER_MAX_RETRIES)
+                self._reconnect_count = 0
 
-            except Exception as e:
-                logger.error(
-                    "WebSocket connection error",
-                    extra=ctx_exception(e, function_name="connect", operation=f"connect to {self.EXCHANGE_NAME}"),
-                    exc_info=True,
-                )
-                await self._handle_disconnect()
-
-        if self._reconnect_count >= self.MAX_RECONNECT_ATTEMPTS:
-            logger.error(
-                "Max reconnect attempts reached",
-                extra=ctx(
-                    LogContext.WS_DISCONNECTED,
-                    exchange=self.EXCHANGE_NAME,
-                    reconnect_count=self._reconnect_count,
-                    action="max_reconnect_reached",
-                ),
-            )
-            self.state = ConnectionState.CLOSED
+        self.state = ConnectionState.CLOSED
 
     async def disconnect(self):
         """Gracefully disconnect."""

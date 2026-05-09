@@ -5,6 +5,8 @@ Source of truth: Master_plan.md (Backtest System)
 Backtests run patterns against real OHLCV data with trait-derived parameters.
 """
 
+import pytest
+
 from Fast_Swarm.Backtest.Models.backtest_models import (
     BacktestConfig,
     BacktestResult,
@@ -38,22 +40,20 @@ def make_candles(count: int = 100, base_price: float = 100.0, trend: float = 0.0
     candles = []
     for i in range(count):
         price = base_price + (i * trend)
-        candles.append(
-            {
-                "timestamp": 1704067200 + (i * 3600),  # 1h intervals
-                "open": price,
-                "high": price * 1.01,
-                "low": price * 0.99,
-                "close": price,
-                "volume": 1000.0,
-                "asset": "BTC",
-                # Include some indicators
-                "rsi_14": 50 + (i % 30) - 15,  # Oscillates 35-65
-                "sma_20": price,
-                "ema_12": price,
-                "atr_14": price * 0.02,
-            }
-        )
+        candles.append({
+            "timestamp": 1704067200 + (i * 3600),  # 1h intervals
+            "open": price,
+            "high": price * 1.01,
+            "low": price * 0.99,
+            "close": price,
+            "volume": 1000.0,
+            "asset": "BTC",
+            # Include some indicators
+            "rsi_14": 50 + (i % 30) - 15,  # Oscillates 35-65
+            "sma_20": price,
+            "ema_12": price,
+            "atr_14": price * 0.02,
+        })
     return candles
 
 
@@ -67,8 +67,7 @@ def make_pattern(
         "pattern_id": "test-pattern-001",
         "name": "Test Pattern",
         "direction": direction,
-        "entry_conditions": entry_conditions
-        or [
+        "entry_conditions": entry_conditions or [
             {"indicator": "rsi_14", "operator": "between", "min": 30, "max": 70},
         ],
         "exit_conditions": exit_conditions or {},
@@ -126,7 +125,9 @@ class TestTradingCosts:
         """CONTRACT: Costs are calculated for round-trip (entry + exit)."""
         breakdown = get_trading_costs_breakdown("BTC")
         # Round-trip means costs are doubled
-        assert breakdown["total_pct"] == (breakdown["slippage_pct"] + breakdown["spread_pct"] + breakdown["fee_pct"])
+        assert breakdown["total_pct"] == (
+            breakdown["slippage_pct"] + breakdown["spread_pct"] + breakdown["fee_pct"]
+        )
 
 
 # ============================================================================
@@ -208,7 +209,7 @@ class TestMFEMAE:
         price_history = [100, 105, 102, 110]
         mfe, mae = calculate_mfe_mae(entry_price, price_history, "long")
         assert mfe == 10.0  # (110 - 100) / 100 * 100
-        assert mae == 0.0  # Never went below entry
+        assert mae == 0.0   # Never went below entry
 
     def test_mfe_mae_long_losing(self):
         """CONTRACT: MFE/MAE calculated correctly for losing long."""
@@ -216,7 +217,7 @@ class TestMFEMAE:
         # Price goes: 100 -> 95 -> 98 -> 90
         price_history = [100, 95, 98, 90]
         mfe, mae = calculate_mfe_mae(entry_price, price_history, "long")
-        assert mfe == 0.0  # Never went above entry
+        assert mfe == 0.0   # Never went above entry
         assert mae == -10.0  # (90 - 100) / 100 * 100
 
     def test_mfe_mae_short_winning(self):
@@ -226,7 +227,7 @@ class TestMFEMAE:
         price_history = [100, 95, 98, 90]
         mfe, mae = calculate_mfe_mae(entry_price, price_history, "short")
         assert mfe == 10.0  # (100 - 90) / 100 * 100
-        assert mae == 0.0  # Never went above entry (good for short)
+        assert mae == 0.0   # Never went above entry (good for short)
 
     def test_mfe_mae_empty_history(self):
         """CONTRACT: Empty price history returns zeros."""
@@ -518,25 +519,13 @@ class TestTradeRecord:
     def test_trade_record_is_winner(self):
         """CONTRACT: is_winner property works correctly."""
         winner = TradeRecord(
-            trade_id="t1",
-            pattern_id="p1",
-            asset="BTC",
-            direction="long",
-            entry_price=100,
-            exit_price=110,
-            entry_timestamp=0,
-            exit_timestamp=1,
+            trade_id="t1", pattern_id="p1", asset="BTC", direction="long",
+            entry_price=100, exit_price=110, entry_timestamp=0, exit_timestamp=1,
             pnl_pct=10.0,
         )
         loser = TradeRecord(
-            trade_id="t2",
-            pattern_id="p1",
-            asset="BTC",
-            direction="long",
-            entry_price=100,
-            exit_price=90,
-            entry_timestamp=0,
-            exit_timestamp=1,
+            trade_id="t2", pattern_id="p1", asset="BTC", direction="long",
+            entry_price=100, exit_price=90, entry_timestamp=0, exit_timestamp=1,
             pnl_pct=-10.0,
         )
         assert winner.is_winner is True
@@ -545,31 +534,17 @@ class TestTradeRecord:
     def test_trade_record_gross_pnl(self):
         """CONTRACT: gross_pnl adds back costs."""
         trade = TradeRecord(
-            trade_id="t1",
-            pattern_id="p1",
-            asset="BTC",
-            direction="long",
-            entry_price=100,
-            exit_price=110,
-            entry_timestamp=0,
-            exit_timestamp=1,
-            pnl_pct=9.5,
-            fees_pct=0.3,
-            slippage_pct=0.2,
+            trade_id="t1", pattern_id="p1", asset="BTC", direction="long",
+            entry_price=100, exit_price=110, entry_timestamp=0, exit_timestamp=1,
+            pnl_pct=9.5, fees_pct=0.3, slippage_pct=0.2,
         )
         assert trade.gross_pnl_pct == 10.0  # 9.5 + 0.3 + 0.2
 
     def test_trade_record_to_dict(self):
         """CONTRACT: Trade can be serialized."""
         trade = TradeRecord(
-            trade_id="t1",
-            pattern_id="p1",
-            asset="BTC",
-            direction="long",
-            entry_price=100,
-            exit_price=110,
-            entry_timestamp=0,
-            exit_timestamp=1,
+            trade_id="t1", pattern_id="p1", asset="BTC", direction="long",
+            entry_price=100, exit_price=110, entry_timestamp=0, exit_timestamp=1,
             pnl_pct=10.0,
         )
         d = trade.to_dict()

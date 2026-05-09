@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from Agents.Services.fitness_service import TradeData, calculate_fitness
+from Fast_Swarm.Agents.Services.fitness_service import TradeData, calculate_fitness
 from Tests.Fixtures.factories import TradeFactory
 
 # =============================================================================

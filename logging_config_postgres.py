@@ -28,7 +28,7 @@ from typing import Any
 
 try:
     import psycopg
-    from psycopg import AsyncConnection  # noqa: F401
+    from psycopg import AsyncConnection
 
     PSYCOPG_AVAILABLE = True
 except ImportError:

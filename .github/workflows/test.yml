@@ -1,0 +1,170 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'    # Daily 3AM UTC
+    - cron: '0 6 * * 0'    # Weekly Sunday 6AM UTC
+
+jobs:
+  unit-tests:
+    name: Unit Tests (no DB)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+      - name: Run unit tests
+        working-directory: src/Fast_Swarm
+        run: |
+          pytest Tests/ -m "not requires_db and not integration and not slow" \
+            --hypothesis-profile=dev \
+            --timeout=30 \
+            -q --tb=short
+
+  db-tests:
+    name: DB + Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: coinswarm
+          POSTGRES_PASSWORD: coinswarm_dev_2024
+          POSTGRES_DB: coinswarm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+      - name: Run DB and integration tests
+        working-directory: src/Fast_Swarm
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: coinswarm
+          DB_PASSWORD: coinswarm_dev_2024
+          DB_NAME: coinswarm
+        run: |
+          pytest Tests/ -m "requires_db or integration" \
+            --hypothesis-profile=ci \
+            --cov=Fast_Swarm \
+            --cov-report=term-missing \
+            --cov-fail-under=60 \
+            --timeout=60 \
+            -q --tb=short
+
+  daily-extended:
+    name: Extended Test Suite
+    if: github.event.schedule == '0 3 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: coinswarm
+          POSTGRES_PASSWORD: coinswarm_dev_2024
+          POSTGRES_DB: coinswarm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+      - name: Run full test suite
+        working-directory: src/Fast_Swarm
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: coinswarm
+          DB_PASSWORD: coinswarm_dev_2024
+          DB_NAME: coinswarm
+        run: |
+          pytest Tests/ \
+            --hypothesis-profile=ci \
+            --cov=Fast_Swarm \
+            --cov-report=term-missing \
+            --cov-report=html:../../coverage-report \
+            --cov-fail-under=60 \
+            --timeout=120 \
+            -v --tb=long
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report/
+
+  weekly-mutation:
+    name: Mutation Testing
+    if: github.event.schedule == '0 6 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: coinswarm
+          POSTGRES_PASSWORD: coinswarm_dev_2024
+          POSTGRES_DB: coinswarm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+      - name: Run mutation testing
+        working-directory: src/Fast_Swarm
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: coinswarm
+          DB_PASSWORD: coinswarm_dev_2024
+          DB_NAME: coinswarm
+        run: |
+          mutmut run --CI || true
+          mutmut results > mutation-report.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: src/Fast_Swarm/mutation-report.txt

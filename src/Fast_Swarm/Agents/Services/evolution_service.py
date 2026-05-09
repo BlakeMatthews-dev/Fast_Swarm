@@ -564,12 +564,22 @@ class AgentEvolutionService:
         # Override traits
         agent_record.traits = mixed_traits
 
+        # Build assigned_patterns from merged pool, filtered to selected IDs
+        selected_ids = set(agent_record.pattern_ids or [])
+        merged_patterns = [
+            p for p in available_patterns
+            if p.get("pattern_id") in selected_ids
+        ]
+        # Fallback: if no IDs matched, use all available patterns from parents
+        if not merged_patterns:
+            merged_patterns = available_patterns
+
         # Convert to SQLModel Agent
         child = Agent(
             agent_id=agent_record.agent_id,
             name=f"agent_{agent_record.agent_id[:8]}",
             traits=mixed_traits,
-            assigned_patterns=agent_record.pattern_ids,
+            assigned_patterns=merged_patterns,
             pattern_weights=agent_record.pattern_weights,
             generation=new_generation,
             parent_a_id=parent_a_id,

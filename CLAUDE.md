@@ -225,6 +225,16 @@ Comprehensive technical documentation in `docs/`:
 | `docs/CRUCIBLE.md` | Wisdom extraction, clone-and-retire |
 | `docs/DEPRECATED.md` | Legacy systems (Cloudflare, Redis) |
 
+## Output Formatting
+
+**NO UNICODE OR EMOJI** - This project is developed on Windows with cp1252 encoding. Do NOT use:
+
+- Box drawing characters (like those in polars DataFrame output)
+- Emoji in code output or print statements
+- Non-ASCII characters in any generated output
+
+Use plain ASCII for all terminal output: `=`, `-`, `|`, `+` for tables and separators.
+
 ## Legacy/Deprecated
 
 The following are **NOT part of the current system** (see `docs/DEPRECATED.md`):

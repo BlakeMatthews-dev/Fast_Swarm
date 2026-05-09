@@ -19,8 +19,6 @@ import psycopg2
 # Add scripts dir to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-import contextlib
-
 from ai_entry_exit_prompts import ENTRY_SYSTEM_PROMPT, format_entry_prompt
 from evaluate_ai_mfe_capture import calculate_mfe_mae, get_forward_candles, load_canonical_periods_from_db
 
@@ -167,7 +165,7 @@ async def wait_for_vllm(model: str, timeout: int = 180) -> bool:
                     loaded = resp.json()["data"][0]["id"]
                     if model in loaded or loaded in model:
                         return True
-            except Exception:
+            except:
                 pass
             await asyncio.sleep(3)
     return False
@@ -198,8 +196,10 @@ def kill_vllm(proc: subprocess.Popen):
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
     # Also kill vLLM processes inside WSL
     subprocess.run(["wsl", "-e", "bash", "-c", "pkill -f vllm"], capture_output=True)
-    with contextlib.suppress(Exception):
+    try:
         proc.wait(timeout=5)
+    except:
+        pass
 
 
 async def run_all_benchmarks():

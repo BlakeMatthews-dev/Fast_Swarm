@@ -16,6 +16,8 @@ services:
       POSTGRES_DB: coinswarm
     volumes:
       - G:/docker-data/postgres:/var/lib/postgresql/data
+    # Increase shared memory for large UPDATE operations (default 64MB is too small)
+    shm_size: 2g
     # Tuned for 128GB RAM system with high concurrency
     command:
       - "postgres"

@@ -388,6 +388,68 @@ def get_windows_for_timeframe(timeframe: str, count: int = 5) -> list[Window]:
     return random.sample(candidates, min(count, len(candidates)))
 
 
+def get_training_windows(count: int = 10, oos_days: int = 180, seed: int = None) -> list[Window]:
+    """
+    Get windows from the TRAINING set (older than oos_days).
+
+    These are windows where end_ts is before the OOS cutoff.
+    Used for in-sample backtesting during evolution.
+
+    Args:
+        count: Number of windows to return
+        oos_days: Number of recent days reserved for OOS (default: 180 = 6 months)
+        seed: Optional seed for reproducible selection
+    """
+    if not _POOL:
+        raise RuntimeError("Pool not generated. Call generate_pool() or initialize() first.")
+
+    cutoff_ts = int((datetime.utcnow() - timedelta(days=oos_days)).timestamp() * 1000)
+    candidates = [w for w in _POOL if w.end_ts < cutoff_ts]
+
+    if not candidates:
+        # Fallback: if no windows are old enough, use all windows (bootstrapping)
+        print(f"[Windows] WARNING: No training windows older than {oos_days} days, using full pool")
+        candidates = list(_POOL)
+
+    if seed is not None:
+        random.seed(seed)
+    return random.sample(candidates, min(count, len(candidates)))
+
+
+def get_oos_windows(count: int = 10, oos_days: int = 180, seed: int = None, timeframes: list[str] = None) -> list[Window]:
+    """
+    Get windows from the OUT-OF-SAMPLE set (within last oos_days).
+
+    These windows test generalization — agents should NOT be trained on this data.
+    Supports multi-timeframe filtering for the OOS gauntlet.
+
+    Args:
+        count: Number of windows to return
+        oos_days: Number of recent days for OOS (default: 180 = 6 months)
+        seed: Optional seed for reproducible selection
+        timeframes: Optional list of timeframes to include (default: all)
+    """
+    if not _POOL:
+        raise RuntimeError("Pool not generated. Call generate_pool() or initialize() first.")
+
+    cutoff_ts = int((datetime.utcnow() - timedelta(days=oos_days)).timestamp() * 1000)
+    candidates = [w for w in _POOL if w.start_ts >= cutoff_ts]
+
+    if timeframes:
+        candidates = [w for w in candidates if w.timeframe in timeframes]
+
+    if not candidates:
+        print(f"[Windows] WARNING: No OOS windows within {oos_days} days, using recent 25% of pool")
+        sorted_pool = sorted(_POOL, key=lambda w: w.end_ts, reverse=True)
+        candidates = sorted_pool[: max(1, len(sorted_pool) // 4)]
+        if timeframes:
+            candidates = [w for w in candidates if w.timeframe in timeframes] or candidates
+
+    if seed is not None:
+        random.seed(seed)
+    return random.sample(candidates, min(count, len(candidates)))
+
+
 def get_pool_stats() -> dict:
     """Get statistics about the current window pool."""
     if not _POOL:

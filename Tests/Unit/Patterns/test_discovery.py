@@ -173,8 +173,8 @@ def pattern_jaccard_similarity(p1: dict[str, Any], p2: dict[str, Any]) -> float:
     if not conds1 or not conds2:
         return 0.0
 
-    indicators1 = {c.get("indicator") for c in conds1}
-    indicators2 = {c.get("indicator") for c in conds2}
+    indicators1 = set(c.get("indicator") for c in conds1)
+    indicators2 = set(c.get("indicator") for c in conds2)
 
     intersection = len(indicators1 & indicators2)
     union = len(indicators1 | indicators2)
@@ -412,7 +412,7 @@ class TestWinnerLoserAnalysis:
 
         losers = classified["losers"]
         if losers:
-            avg_pnl = statistics.mean([loser["pnl_pct"] for loser in losers])
+            avg_pnl = statistics.mean([l["pnl_pct"] for l in losers])
             assert avg_pnl <= 0
 
 

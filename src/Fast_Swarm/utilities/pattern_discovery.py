@@ -44,8 +44,10 @@ except ImportError:
     HAS_REQUESTS = False
 
 
-# Configuration
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+# Configuration — default to conductor for free cloud tokens
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "conductor")
+CONDUCTOR_URL = os.getenv("CONDUCTOR_URL", "http://host.docker.internal:8100")
+CONDUCTOR_KEY = os.getenv("CONDUCTOR_KEY", "sk-conductor-router-2026")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "sonnet")
@@ -265,19 +267,8 @@ class PatternDiscoveryScheduler:
         indicator_cols_set = set()
 
         for row in raw_trades:
-            (
-                pnl_pct,
-                symbol,
-                timeframe,
-                entry_indicators,
-                entry_price,
-                exit_price,
-                mfe_pct,
-                mfe_price,
-                mae_pct,
-                mae_price,
-                side,
-            ) = row
+            (pnl_pct, symbol, timeframe, entry_indicators,
+             entry_price, exit_price, mfe_pct, mfe_price, mae_pct, mae_price, side) = row
 
             if not entry_indicators or not isinstance(entry_indicators, dict):
                 continue
@@ -319,7 +310,7 @@ class PatternDiscoveryScheduler:
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trade_type": "chaos",
-                **indicators,
+                **indicators
             }
 
             # 2. BEST_EXIT - same entry, exit at MFE
@@ -330,7 +321,7 @@ class PatternDiscoveryScheduler:
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trade_type": "best_exit",
-                **indicators,
+                **indicators
             }
 
             # 3. WORST_EXIT - same entry, exit at MAE
@@ -340,7 +331,7 @@ class PatternDiscoveryScheduler:
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trade_type": "worst_exit",
-                **indicators,
+                **indicators
             }
 
             # 4. PERFECT - hypothetical better entry → MFE exit
@@ -358,7 +349,7 @@ class PatternDiscoveryScheduler:
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trade_type": "perfect",
-                **indicators,
+                **indicators
             }
 
             # Classify into winners/losers based on PnL threshold
@@ -370,9 +361,7 @@ class PatternDiscoveryScheduler:
                 # Trades between thresholds are ignored (neutral zone)
 
         indicator_cols = list(indicator_cols_set)[:30]
-        print(
-            f"[PatternDiscovery] Generated {len(winners)} winners, {len(losers)} losers from {len(raw_trades)} base trades"
-        )
+        print(f"[PatternDiscovery] Generated {len(winners)} winners, {len(losers)} losers from {len(raw_trades)} base trades")
         print("[PatternDiscovery] Trade types: chaos, best_exit, worst_exit, perfect")
         print(f"[PatternDiscovery] Extracted {len(indicator_cols)} indicator columns")
 
@@ -449,7 +438,7 @@ class PatternDiscoveryScheduler:
     ) -> str:
         """Build the LLM prompt for pattern discovery."""
         avg_winner_pnl = sum(w["pnl_pct"] for w in winners) / len(winners) if winners else 0
-        avg_loser_pnl = sum(loser["pnl_pct"] for loser in losers) / len(losers) if losers else 0
+        avg_loser_pnl = sum(l["pnl_pct"] for l in losers) / len(losers) if losers else 0
         win_rate = len(winners) / (len(winners) + len(losers)) * 100 if (winners or losers) else 0
 
         feature_analysis = []
@@ -500,11 +489,44 @@ Output ONLY valid JSON:
         return prompt
 
     async def _call_llm(self, prompt: str) -> str | None:
-        """Call the LLM provider."""
-        if self.llm_provider == "claude":
+        """Call the LLM provider. Conductor → Ollama → Claude fallback chain."""
+        if self.llm_provider == "conductor":
+            result = self._call_conductor(prompt)
+            if result:
+                return result
+            print("[PatternDiscovery] Conductor failed, falling back to Ollama")
+            return self._call_ollama(prompt)
+        elif self.llm_provider == "claude":
             return self._call_claude_cli(prompt)
         else:
             return self._call_ollama(prompt)
+
+    def _call_conductor(self, prompt: str) -> str | None:
+        """Call Conductor Router (OpenAI-compatible). Uses free cloud tokens."""
+        if not HAS_REQUESTS:
+            return None
+        try:
+            response = requests.post(
+                f"{CONDUCTOR_URL}/v1/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 2000,
+                },
+                headers={"Authorization": f"Bearer {CONDUCTOR_KEY}"},
+                timeout=120,
+            )
+            if response.status_code != 200:
+                print(f"[PatternDiscovery] Conductor error: HTTP {response.status_code}")
+                return None
+            content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            model_used = response.json().get("model", "unknown")
+            print(f"[PatternDiscovery] Conductor response: {len(content)} chars via {model_used}")
+            return content
+        except Exception as e:
+            print(f"[PatternDiscovery] Conductor error: {e}")
+            return None
 
     def _call_ollama(self, prompt: str) -> str | None:
         """Call Ollama API."""

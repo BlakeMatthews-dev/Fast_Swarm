@@ -63,7 +63,7 @@ def get_uncertain_candles(conn, limit=10):
         "regime",
         "period_name",
     ]
-    return [dict(zip(columns, row, strict=False)) for row in cur.fetchall()]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
 def get_forward_mfe(conn, time, bars=24):

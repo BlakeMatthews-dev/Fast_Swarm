@@ -10,7 +10,7 @@ JUST KEEP TESTING, JUST KEEP TESTING!
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
-from Agents.Services.fitness_service import TradeData
+from Fast_Swarm.Agents.Services.fitness_service import TradeData
 
 # =============================================================================
 # NAMED CONSTANTS (from factories.py - NO DUPLICATION)

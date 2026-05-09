@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "C:\fast_swarm\scripts\deep_analysis.py", line 4, in <module>
+    import polars as pl
+ModuleNotFoundError: No module named 'polars'

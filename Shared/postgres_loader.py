@@ -9,10 +9,9 @@ import asyncio
 from datetime import UTC, datetime
 
 import pandas as pd
-from sqlmodel import select
-
 from Fast_Swarm.Database import async_session_maker
 from Fast_Swarm.Infrastructure.Models.market_data_models import EnhancedCandle
+from sqlmodel import select
 
 
 class PostgresOHLCVLoader:

@@ -1,0 +1,37 @@
+=== MISSION ===
+You are auditing the Crucible - the graduation test for evolved agents.
+
+=== GOAL ===
+Verify that the Crucible actually tests agent robustness: trade every asset sequentially, prove you're not a one-trick pony.
+
+=== THE FLOW TO VERIFY ===
+1. Agent "levels up" by spawning enough offspring
+2. This triggers CRUCIBLE entry
+3. Agent trades each asset ONE AT A TIME, IN ORDER
+4. Stats recorded per asset
+5. Final balance calculated
+6. Results determine promotion to paper trading
+
+=== QUESTIONS TO ANSWER ===
+- What triggers Crucible entry? (offspring count? fitness threshold?)
+- What's the asset list? Is it fixed or dynamic?
+- Is it truly ONE asset at a time (no portfolio)?
+- Does order matter? (easy assets first vs random?)
+- What stats are tracked per asset?
+- What's the pass/fail criteria?
+- What happens to agents that fail Crucible?
+- Can an agent retry Crucible?
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\crucible_flow.md
+
+=== CRUCIBLE INTEGRITY ===
+The point is to prevent overfitting. Check:
+- Is Crucible data DIFFERENT from backtest data?
+- Can agents "cheat" by having seen Crucible assets before?
+- Is the test actually harder than regular backtest?
+
+=== FORMAT ===
+[CRITICAL/HIGH/MEDIUM] file:line
+CRUCIBLE FLAW: What's wrong with the graduation test?
+CONSEQUENCE: Unfit agents graduate? Good agents fail?

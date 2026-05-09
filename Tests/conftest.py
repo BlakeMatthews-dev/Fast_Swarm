@@ -8,6 +8,7 @@ Note: Fast_Swarm is installed in editable mode (pip install -e .)
 so imports like `from Fast_Swarm.Agents...` work automatically.
 """
 
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncGenerator
@@ -16,16 +17,17 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-# Set test database URL - uses same PostgreSQL, different schema or rollback
+# Set test database URL - uses dedicated test database to avoid schema drift
 os.environ.setdefault("POSTGRES_HOST", "localhost")
 os.environ.setdefault("POSTGRES_PORT", "5432")
 os.environ.setdefault("POSTGRES_USER", "coinswarm")
 os.environ.setdefault("POSTGRES_PASSWORD", "coinswarm_dev_2024")
-os.environ.setdefault("POSTGRES_DB", "coinswarm")
+os.environ.setdefault("POSTGRES_DB", "coinswarm_test")  # Separate test DB
 
 
 # ============================================================================
@@ -33,34 +35,105 @@ os.environ.setdefault("POSTGRES_DB", "coinswarm")
 # ============================================================================
 
 
+_test_db_url = (
+    f"postgresql+asyncpg://"
+    f"{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
+    f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}"
+    f"/{os.environ['POSTGRES_DB']}"
+)
+
+# Schema sync flag — models registered and tables created once per process
+_schema_synced = False
+_test_engine = None
+
+
+def _import_all_models():
+    """Import ALL models to register them in SQLModel.metadata (FK resolution)."""
+    try:
+        import Fast_Swarm.Agents.Models.agent_models  # noqa: F401
+        import Fast_Swarm.Agents.Models.memory_models  # noqa: F401
+        import Fast_Swarm.Agents.Hivemind.Models.coach_models  # noqa: F401
+        import Fast_Swarm.Agents.Hivemind.Models.governance_models  # noqa: F401
+        import Fast_Swarm.Evolution.Models.evolution_models  # noqa: F401
+        import Fast_Swarm.Infrastructure.Models.exchange_models  # noqa: F401
+        import Fast_Swarm.Infrastructure.Models.market_data_models  # noqa: F401
+        import Fast_Swarm.Infrastructure.Models.sentiment_models  # noqa: F401
+        import Fast_Swarm.Patterns.Models.pattern_models  # noqa: F401
+        import Fast_Swarm.System.Models.crucible_models  # noqa: F401
+        import Fast_Swarm.Trades.Models.trade_models  # noqa: F401
+    except ImportError as e:
+        import warnings
+        warnings.warn(f"Could not import all models: {e}")
+
+
+async def _get_engine():
+    """Get or create the shared test engine, syncing schema on first call."""
+    global _test_engine, _schema_synced
+    if _test_engine is None:
+        _import_all_models()
+        _test_engine = create_async_engine(_test_db_url, poolclass=NullPool)
+    if not _schema_synced:
+        from sqlalchemy import text
+        # Terminate stale connections from previous runs before DDL
+        async with _test_engine.connect() as conn:
+            await conn.execute(text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND pid != pg_backend_pid()"
+            ))
+            await conn.commit()
+        async with _test_engine.begin() as conn:
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.run_sync(SQLModel.metadata.create_all)
+        _schema_synced = True
+    return _test_engine
+
+
+# Session-scoped event loop — all async tests share one loop
+# This prevents the "attached to a different loop" error when NullPool
+# connections are reused across tests.
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create a session-scoped event loop for async tests."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+# Build the TRUNCATE statement once (after schema sync)
+_truncate_sql = None
+
+
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """
-    Create a database session with transaction rollback.
+    Create a database session for testing.
 
-    Each test runs in a transaction that gets rolled back,
-    ensuring test isolation without polluting the database.
+    Uses NullPool (fresh connection per session, no persistence across tests).
+    Session-scoped event loop prevents loop mismatch.
+    Truncates all tables before each test for isolation.
+    Service code can freely call session.exec(), flush(), commit().
     """
-    db_url = (
-        f"postgresql+asyncpg://"
-        f"{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
-        f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}"
-        f"/{os.environ['POSTGRES_DB']}"
-    )
-    engine = create_async_engine(db_url, echo=False, future=True)
+    global _truncate_sql
+    from sqlalchemy.orm import sessionmaker
+    engine = await _get_engine()
 
-    # Create tables if they don't exist
-    async with engine.begin() as conn:
-        await conn.run_sync(SQLModel.metadata.create_all)
+    if _truncate_sql is None:
+        # Use DELETE instead of TRUNCATE — DELETE only needs RowExclusiveLock
+        # (TRUNCATE needs AccessExclusiveLock which can deadlock with stale connections)
+        from sqlalchemy import text
+        tables = list(reversed(SQLModel.metadata.sorted_tables))
+        if tables:
+            # Delete in reverse dependency order to avoid FK violations
+            _truncate_sql = [text(f"DELETE FROM {t.name}") for t in tables]
 
     async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
     async with async_session_maker() as session:
-        async with session.begin():
-            yield session
-            # Rollback happens automatically when context exits
-
-    await engine.dispose()
+        if _truncate_sql is not None:
+            for stmt in _truncate_sql:
+                await session.execute(stmt)
+            await session.commit()
+        yield session
 
 
 # ============================================================================
@@ -467,7 +540,7 @@ def aggressive_momentum():
 # FEATURE FLAG FIXTURES
 # ============================================================================
 
-from Config.feature_flags import FLAGS, ServiceVersion, reset_flags, with_version
+from Fast_Swarm.Config.feature_flags import FLAGS, ServiceVersion, reset_flags, with_version
 
 
 @pytest.fixture

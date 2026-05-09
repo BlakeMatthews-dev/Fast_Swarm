@@ -39,7 +39,6 @@ if OTEL_ENABLED:
         if os.getenv("OTEL_EXPORTER") == "jaeger":
             try:
                 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-
                 exporter = OTLPSpanExporter(endpoint=os.getenv("OTEL_ENDPOINT", "localhost:4317"))
                 print("[OTel] Using OTLP/Jaeger exporter")
             except ImportError:
@@ -56,9 +55,7 @@ if OTEL_ENABLED:
         print("[OTel] Tracing enabled")
     except ImportError as e:
         print(f"[OTel] OpenTelemetry not installed: {e}")
-        print(
-            "[OTel] Install with: pip install opentelemetry-api opentelemetry-sdk opentelemetry-instrumentation-fastapi"
-        )
+        print("[OTel] Install with: pip install opentelemetry-api opentelemetry-sdk opentelemetry-instrumentation-fastapi")
         OTEL_ENABLED = False
         OTEL_TRACER = None
 else:
@@ -82,10 +79,12 @@ from Fast_Swarm.Infrastructure.Services.backfill_service import startup_backfill
 from Fast_Swarm.local_agents.backtest.windows import initialize as init_window_pool
 from Fast_Swarm.local_agents.backtest.windows import refresh_and_extend as refresh_window_pool
 from Fast_Swarm.Patterns.Routers import pattern_router as patterns_router
-from Fast_Swarm.System.Routers import system_router
+from Fast_Swarm.System.Routers import system_router, taskmaster_router
 from Fast_Swarm.System.Services.orchestrator import get_orchestrator
+from Fast_Swarm.System.Services.taskmaster_service import get_taskmaster, ComponentStatus
 from Fast_Swarm.Tests.Router import router as test_runner_router
 from Fast_Swarm.Trades.Routers import trade_router as trades_router
+from Fast_Swarm.Trading.Routers import trading_router
 
 # =============================================================================
 # REMOVED: Separate concurrent loops (evolution_loop, pattern_discovery_loop,
@@ -141,6 +140,276 @@ async def window_pool_refresh_loop():
         except Exception as e:
             print(f"[Window Pool] Error: {e}")
             await asyncio.sleep(3600)  # Retry in 1 hour
+
+
+async def get_latest_enriched_candle(session, symbol: str, timeframe: str = "1h") -> dict | None:
+    """
+    Fetch the most recent candle with all indicators computed.
+
+    If the latest candle in DB doesn't have base indicators (rsi_14, ema_21, etc.),
+    fetches a window of 250 candles and computes indicators on-the-fly using
+    calculate_indicators_fast(). This ensures paper trading always has indicator
+    data even for newly-collected candles.
+
+    Args:
+        session: AsyncSession
+        symbol: e.g., "BTCUSDT" or "BTC"
+        timeframe: e.g., "1h", "1m"
+
+    Returns:
+        Dict with OHLCV + all indicator columns, or None if not found
+    """
+    import pandas as pd
+    from sqlalchemy import text
+
+    # Normalize symbol (handle both "BTC" and "BTCUSDT" and "BTC-USDT")
+    base_symbol = symbol.replace("-", "").replace("USDT", "").replace("USD", "")
+    symbol_patterns = [symbol, f"{base_symbol}USDT", f"{base_symbol}-USD", base_symbol]
+
+    # First try: get latest candle and check if it has indicators
+    query = text("""
+        SELECT * FROM enhanced_candles
+        WHERE symbol = ANY(:symbols)
+          AND timeframe = :timeframe
+        ORDER BY time DESC
+        LIMIT 1
+    """)
+
+    result = await session.execute(
+        query,
+        {"symbols": symbol_patterns, "timeframe": timeframe}
+    )
+    row = result.mappings().first()
+
+    if not row:
+        return None
+
+    candle = dict(row)
+
+    # Check if ALL key base indicators are populated (not just a few)
+    # Previously, backtest enrichment mapped ATR incorrectly, so atr_14 might be NULL
+    key_indicators = ["rsi_14", "ema_21", "atr_14", "adx_14", "macd_line"]
+    if all(candle.get(k) is not None for k in key_indicators):
+        # All key indicators present - return as-is
+        return candle
+
+    # Base indicators missing - fetch window and compute on-the-fly
+    window_query = text("""
+        SELECT time, open, high, low, close, volume
+        FROM enhanced_candles
+        WHERE symbol = ANY(:symbols)
+          AND timeframe = :timeframe
+        ORDER BY time DESC
+        LIMIT 250
+    """)
+
+    window_result = await session.execute(
+        window_query,
+        {"symbols": symbol_patterns, "timeframe": timeframe}
+    )
+    rows = window_result.fetchall()
+
+    if len(rows) < 20:
+        # Not enough data to compute indicators
+        return candle
+
+    # Build DataFrame (reverse to chronological order)
+    df = pd.DataFrame(
+        list(reversed(rows)),
+        columns=["time", "open", "high", "low", "close", "volume"]
+    )
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Compute indicators
+    try:
+        from Fast_Swarm.Infrastructure.Services.indicator_calculation_service import calculate_indicators_fast
+        df = calculate_indicators_fast(df, verbose=False)
+
+        # Rename columns to match DB column names
+        col_renames = {
+            "MACD_12_26_9": "macd_line",
+            "MACDs_12_26_9": "macd_signal",
+            "MACDh_12_26_9": "macd_histogram",
+            "BBL_20_2.0": "bb_lower",
+            "BBM_20_2.0": "bb_middle",
+            "BBU_20_2.0": "bb_upper",
+            "BBB_20_2.0": "bb_width",
+            "BBP_20_2.0": "bb_percent",
+            "STOCHk_14_3_3": "stoch_k",
+            "STOCHd_14_3_3": "stoch_d",
+            "STOCHRSIk_14_14_3_3": "stochrsi_k",
+            "STOCHRSId_14_14_3_3": "stochrsi_d",
+            "DMP_14": "plus_di",
+            "DMN_14": "minus_di",
+            "ATRr_7": "atr_7",
+            "ATRr_14": "atr_14",
+            "NATR_14": "natr_14",
+            "TRUERANGE_14": "true_range",
+            "AROONU_14": "aroon_up",
+            "AROOND_14": "aroon_down",
+            "AROONOSC_14": "aroon_osc",
+            "CCI_14": "cci_14",
+            "WILLR_14": "willr_14",
+            "ROC_10": "roc_10",
+            "CMF_20": "cmf_20",
+            "MFI_14": "mfi_14",
+            "EMV_14": "emv_14",
+            "VHF_28": "vhf_28",
+            "TRIX_14": "trix",
+            "CMO_14": "cmo_14",
+        }
+        df.columns = [c.lower() if c not in col_renames else c for c in df.columns]
+        df.rename(columns={k: v for k, v in col_renames.items() if k in df.columns}, inplace=True)
+
+        # Get the last row (most recent candle with all indicators)
+        last_row = df.iloc[-1].to_dict()
+
+        # Merge with original candle data (preserve DB fields like exchange, symbol, timeframe)
+        # Filter out NaN values (pandas NaN is not None, need explicit check)
+        enriched = {**candle}
+        for k, v in last_row.items():
+            if k == "time":
+                continue
+            if v is None:
+                continue
+            try:
+                if pd.isna(v):
+                    continue
+            except (TypeError, ValueError):
+                pass  # Non-numeric values (strings etc.) can't be checked with isna
+            enriched[k] = v
+
+        # Also compute derived indicators
+        from Fast_Swarm.Infrastructure.Services.indicator_enrichment_service import compute_derived_for_candle
+        derived = compute_derived_for_candle(enriched)
+        enriched.update(derived)
+
+        return enriched
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[Paper Trading] On-the-fly indicator computation failed: {e}")
+        return candle
+
+
+async def paper_trading_loop():
+    """
+    Background loop that evaluates paper trading agents against live market data.
+
+    Runs every 60 seconds (1 candle on 1m timeframe).
+    Gets latest enriched candle from DB, evaluates patterns, places trades.
+
+    Note: Bear protection is checked inside evaluate_and_trade() - agents in
+    DEFENSIVE mode will have positions force-closed and new entries blocked.
+    """
+    import logging
+    from Fast_Swarm.Database import async_session_maker
+    from Fast_Swarm.Trading.Services.agent_paper_trading_service import paper_trading_service
+
+    logger = logging.getLogger(__name__)
+    logger.info("[Paper Trading] Starting background trading loop...")
+
+    # Wait for system to stabilize
+    await asyncio.sleep(30)
+
+    # Restore sessions from DB (survives container restarts)
+    try:
+        restore_session = async_session_maker()
+        try:
+            restored = await paper_trading_service.restore_sessions(restore_session)
+            if restored:
+                logger.info("[Paper Trading] Restored %d sessions from DB", restored)
+        finally:
+            await restore_session.close()
+    except Exception as e:
+        logger.error("[Paper Trading] Session restore failed: %s", e)
+
+    while True:
+        try:
+            session = async_session_maker()
+            try:
+                # Get all active paper trading agents
+                active_agents = paper_trading_service.get_all_active_agents()
+                logger.info(f"[Paper Trading] Cycle: {len(active_agents)} active agents")
+
+                if not active_agents:
+                    await asyncio.sleep(60)
+                    continue
+
+                # Pre-fetch candle data ONCE per symbol (shared across all agents)
+                all_symbols = set()
+                for info in active_agents.values():
+                    all_symbols.update(info.get("symbols", []))
+
+                candle_cache = {}
+                for symbol in all_symbols:
+                    try:
+                        # Full market snapshot: all TFs + order book + ticks
+                        from Fast_Swarm.Infrastructure.Services.market_snapshot_service import collect_market_snapshot
+                        candle = await collect_market_snapshot(session, symbol)
+                        if candle and candle.get("close"):
+                            candle_cache[symbol] = candle
+                    except Exception as e:
+                        logger.error(f"[Paper Trading] Failed to fetch {symbol}: {e}")
+
+                for agent_id, info in active_agents.items():
+                    if info.get("paused", False):
+                        continue
+
+                    symbols = info.get("symbols", [])
+                    for symbol in symbols:
+                        candle = candle_cache.get(symbol)
+                        try:
+
+                            if candle is None:
+                                logger.debug(f"[Paper Trading] No candle data for {symbol}")
+                                continue
+
+                            # Log indicator availability (first iteration only for each symbol)
+                            indicator_keys = [k for k in candle if candle[k] is not None and k not in (
+                                "time", "exchange", "symbol", "timeframe", "open", "high", "low", "close", "volume"
+                            )]
+                            logger.debug(f"[Paper Trading] {symbol}: {len(indicator_keys)} indicators available")
+
+                            # Determine regime (from candle or current market)
+                            regime = candle.get("regime", "unknown")
+                            current_price = candle.get("close", 0.0)
+
+                            if current_price <= 0:
+                                continue
+
+                            # Evaluate and potentially trade
+                            indicators_count = len([k for k in candle if candle[k] is not None]) - 9  # subtract OHLCV+meta
+                            result = await paper_trading_service.evaluate_and_trade(
+                                session=session,
+                                agent_id=agent_id,
+                                symbol=symbol,
+                                current_price=current_price,
+                                candle_data=candle,
+                                regime=regime,
+                            )
+
+                            if result:
+                                logger.info(f"[Paper Trading] {agent_id[:8]} {symbol}: {result.get('action', 'unknown')} @ ${current_price:.0f} ({indicators_count} indicators)")
+                            else:
+                                logger.info(f"[Paper Trading] {agent_id[:8]} {symbol}: hold @ ${current_price:.0f} ({indicators_count} ind, regime={regime})")
+
+                        except Exception as e:
+                            # Rollback so next agent isn't poisoned by this failure
+                            try:
+                                await session.rollback()
+                            except Exception:
+                                pass
+                            logger.error(f"[Paper Trading] Error for {agent_id[:8]}/{symbol}: {e}")
+            finally:
+                await session.close()
+
+        except Exception as e:
+            logger.error(f"[Paper Trading] Loop error: {e}")
+
+        # Run every 15 seconds — evaluate on 1m candles for fast signals
+        await asyncio.sleep(15)
 
 
 @asynccontextmanager
@@ -199,16 +468,54 @@ async def lifespan(app: FastAPI):
     orchestrator = get_orchestrator()
     await orchestrator.start()
 
-    # 6. Start Window Pool Refresh Loop (daily at 3am, low impact)
+    # 6. Start Taskmaster (monitors system health, pokes stalled components)
+    print("[Startup] Starting Taskmaster monitoring...")
+    taskmaster = get_taskmaster()
+
+    # Register the orchestrator as a monitored component
+    def orchestrator_health_check():
+        """Health check function for the orchestrator."""
+        orch = get_orchestrator()
+        return {
+            "status": ComponentStatus.HEALTHY if orch._running else ComponentStatus.STALLED,
+            "last_active_at": orch.state.last_cycle_at,
+            "metadata": {
+                "current_phase": orch.state.phase.value,
+                "cycles_completed": orch.state.cycles_completed,
+                "is_running": orch._running,
+            }
+        }
+
+    taskmaster.register_component(
+        component_id="orchestrator",
+        name="Backtest Orchestrator",
+        health_check=orchestrator_health_check
+    )
+
+    await taskmaster.start_monitoring()
+
+    # 7. Start Window Pool Refresh Loop (daily at 3am, low impact)
     print("[Startup] Starting window pool refresh loop...")
     asyncio.create_task(window_pool_refresh_loop())
+
+    # 8. Start Paper Trading Loop (evaluates agents every 60s)
+    print("[Startup] Starting paper trading loop...")
+    asyncio.create_task(paper_trading_loop())
+
+    # 9. Start Sentiment Collector (Fear & Greed backfill + 4h refresh)
+    print("[Startup] Starting sentiment collector...")
+    from Fast_Swarm.Infrastructure.Services.sentiment_collector import sentiment_collector_loop
+    asyncio.create_task(sentiment_collector_loop())
 
     yield
 
     # Shutdown logic
     print("Shutting down...")
 
-    # Stop orchestrator first (graceful shutdown of P2 operations)
+    # Stop taskmaster first (stops monitoring)
+    await taskmaster.stop_monitoring()
+
+    # Stop orchestrator (graceful shutdown of P2 operations)
     await orchestrator.stop()
 
     await stream_manager.stop()
@@ -247,12 +554,14 @@ app.include_router(evolution_router.router)
 app.include_router(actions_router.router)
 app.include_router(patterns_router.router)
 app.include_router(trades_router.router)
+app.include_router(trading_router.router)
 app.include_router(evolution_monitor_router.router)
 app.include_router(governance_router.router)
 app.include_router(market_data_router.router)
 app.include_router(exchanges_router.router)
 app.include_router(sentiment_router.router)
 app.include_router(system_router.router)
+app.include_router(taskmaster_router.router)
 app.include_router(test_runner_router.router)
 
 # Mount static files for dashboard

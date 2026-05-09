@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Column, DateTime, Index, Integer, Numeric
+from sqlalchemy import BigInteger, Column, DateTime, Numeric, Index, Integer
 from sqlmodel import Field, SQLModel
 
 
@@ -177,7 +177,7 @@ class OrderBookSnapshot(SQLModel, table=True):
 class BacktestWindow(SQLModel, table=True):
     """
     Pre-computed backtest windows cached for fast startup.
-
+    
     Cached from windows.py generate_pool() to avoid recomputation on every launch.
     Invalidated when data ranges change (checked against max data timestamp).
     """
@@ -190,11 +190,11 @@ class BacktestWindow(SQLModel, table=True):
     start_ts: int = Field(sa_column=Column(BigInteger))  # milliseconds
     end_ts: int = Field(sa_column=Column(BigInteger))  # milliseconds
     created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
-
+    
     # Track cache validity
     pool_seed: int = Field(default=42, sa_column=Column(Integer))  # Seed used to generate pool
     data_max_ts: int | None = Field(default=None, sa_column=Column(BigInteger))  # Max timestamp in milliseconds
-
+    
     __table_args__ = (
         Index("ix_backtest_window_pair", "symbol", "timeframe"),
         Index("ix_backtest_window_range", "start_ts", "end_ts"),

@@ -112,7 +112,7 @@ def load_canonical_periods_from_db(conn) -> list:
         )
 
         rows = cur.fetchall()
-        candles = [dict(zip(cols, row, strict=False)) for row in rows]
+        candles = [dict(zip(cols, row)) for row in rows]
 
         if candles:
             results.append(
@@ -156,7 +156,7 @@ def get_forward_candles(conn, symbol: str, timeframe: str, start_time: str, num_
     )
 
     rows = cur.fetchall()
-    return [dict(zip(cols, row, strict=False)) for row in rows]
+    return [dict(zip(cols, row)) for row in rows]
 
 
 def calculate_mfe_mae(candles: list, entry_price: float) -> tuple[float, float, int]:

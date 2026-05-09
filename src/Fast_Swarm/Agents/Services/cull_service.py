@@ -39,6 +39,31 @@ def get_best_regime_fitness(agent: Agent) -> float:
     return float(agent.fitness_score or 0)
 
 
+def get_cull_score(agent: Agent) -> float:
+    """
+    Combined cull score: in-sample fitness weighted by OOS performance.
+
+    Agents with high in-sample but low OOS fitness get penalized — they're
+    likely overfit. OOS fitness stored in agent.traits['oos_fitness_score']
+    by the evolution cycle's Phase 1b.
+
+    Formula: base_fitness * oos_multiplier
+    - No OOS data: multiplier = 1.0 (neutral)
+    - OOS > 30: multiplier = 1.0-1.5 (bonus for generalizing)
+    - OOS < 15: multiplier = 0.3-0.7 (penalty for overfitting)
+    """
+    base = get_best_regime_fitness(agent)
+    traits = agent.traits or {}
+    oos = traits.get("oos_fitness_score")
+
+    if oos is None:
+        return base  # No OOS data yet, use base fitness
+
+    # OOS multiplier: linear scale from 0.3 (oos=0) to 1.5 (oos=60+)
+    oos_mult = min(1.5, max(0.3, 0.3 + (float(oos) / 60.0) * 1.2))
+    return base * oos_mult
+
+
 class AgentCullService:
     """Service for culling underperforming agents."""
 
@@ -129,18 +154,20 @@ class AgentCullService:
             }
 
         # Get the bottom performers FROM EVALUATED AGENTS ONLY
-        # Sort by BEST REGIME fitness (protects specialists)
-        # Agents with high peak performance in ANY regime survive
-        evaluated_agents.sort(key=lambda a: get_best_regime_fitness(a))
+        # Sort by CULL SCORE: regime fitness × OOS multiplier
+        # Protects specialists AND penalizes overfit agents
+        evaluated_agents.sort(key=lambda a: get_cull_score(a))
         agents_to_cull = evaluated_agents[:cull_count]
 
-        # Log regime-aware culling
+        # Log OOS-aware culling
         if agents_to_cull:
             sample = agents_to_cull[0]
+            oos = (sample.traits or {}).get("oos_fitness_score", "N/A")
             print(
-                f"[Cull] Using best-regime fitness. Sample: {sample.name} "
+                f"[Cull] OOS-aware culling. Sample: {sample.name} "
                 f"aggregate={float(sample.fitness_score or 0):.1f}, "
-                f"best_regime={get_best_regime_fitness(sample):.1f}"
+                f"best_regime={get_best_regime_fitness(sample):.1f}, "
+                f"oos={oos}, cull_score={get_cull_score(sample):.1f}"
             )
         culled_ids = []
 

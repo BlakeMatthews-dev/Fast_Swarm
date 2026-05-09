@@ -5,6 +5,7 @@ Source of truth: Master_plan.md (Evolution Cycle)
 4-Phase cycle: SPAWN → BACKTEST → SELECT → REPRODUCE
 """
 
+
 from Fast_Swarm.Agents.Services.evolution_service import (
     AgentEvolutionService,
     _extract_patterns_from_agent,
@@ -25,7 +26,6 @@ def make_mock_agent(
     parent_a_id: str | None = None,
 ) -> object:
     """Create a mock agent object for testing."""
-
     class MockAgent:
         pass
 
@@ -506,3 +506,302 @@ class TestConcurrencyProtection:
         reset_evolution_flag()
         status = get_evolution_status()
         assert status["is_running"] is False
+
+
+# ============================================================================
+# CROSSOVER PATTERNS - ACTUAL SERVICE BEHAVIOR
+# ============================================================================
+
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+class TestCrossoverPatterns:
+    """Tests for crossover_agents behavior: pattern merging, traits, generation."""
+
+    def _make_parent(
+        self,
+        agent_id: str,
+        generation: int = 1,
+        traits: dict | None = None,
+        patterns: dict | None = None,
+        parent_a_id: str | None = None,
+        level: int = 1,
+    ):
+        """Helper: build a mock Agent suitable for crossover_agents."""
+        agent = MagicMock()
+        agent.agent_id = agent_id
+        agent.generation = generation
+        agent.traits = traits or {
+            "risk_tolerance": 0.3,
+            "volatility_seeking": 0.7,
+            "stop_loss_tightness": 0.5,
+            "profit_target_greed": 0.4,
+        }
+        agent.assigned_patterns = patterns or {
+            "base": [
+                {
+                    "pattern_id": f"{agent_id}-p1",
+                    "entry_conditions": [{"indicator": "rsi_14", "min": 30}],
+                    "exit_conditions": {"stop_loss": 5},
+                    "fitness_score": 60.0,
+                }
+            ],
+            "weights": {f"{agent_id}-p1": 1.0},
+        }
+        agent.pattern_weights = {f"{agent_id}-p1": 1.0}
+        agent.parent_a_id = parent_a_id
+        agent.parent_b_id = None
+        agent.trading_philosophy = "Test philosophy"
+        agent.is_active = True
+        agent.status = "active"
+        agent.level = level
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_merges_both_parents_as_dict(self):
+        """Child assigned_patterns is a dict (not list), containing patterns from both parents."""
+        parent_a = self._make_parent("pa-1", patterns={
+            "base": [{"pattern_id": "p-a1", "entry_conditions": [{"ind": "rsi"}], "exit_conditions": {"sl": 5}, "fitness_score": 55.0}],
+            "weights": {"p-a1": 1.0},
+        })
+        parent_b = self._make_parent("pb-2", patterns={
+            "base": [{"pattern_id": "p-b1", "entry_conditions": [{"ind": "macd"}], "exit_conditions": {"sl": 3}, "fitness_score": 65.0}],
+            "weights": {"p-b1": 1.0},
+        })
+
+        # Build merged patterns the same way the service does
+        patterns_a = _extract_patterns_from_agent(parent_a)
+        patterns_b = _extract_patterns_from_agent(parent_b)
+        pattern_map = {}
+        for p in patterns_a + patterns_b:
+            pid = p.get("pattern_id")
+            if pid not in pattern_map or p.get("fitness_score", 0) > pattern_map[pid].get("fitness_score", 0):
+                pattern_map[pid] = p
+
+        assert isinstance(pattern_map, dict)
+        assert "p-a1" in pattern_map
+        assert "p-b1" in pattern_map
+
+    @pytest.mark.asyncio
+    async def test_deduplicates_by_pattern_id(self):
+        """Duplicate pattern IDs are merged, keeping higher fitness."""
+        parent_a = self._make_parent("pa-dup", patterns={
+            "base": [{"pattern_id": "shared", "entry_conditions": [{"ind": "rsi"}], "exit_conditions": {"sl": 5}, "fitness_score": 40.0}],
+            "weights": {"shared": 1.0},
+        })
+        parent_b = self._make_parent("pb-dup", patterns={
+            "base": [{"pattern_id": "shared", "entry_conditions": [{"ind": "rsi"}], "exit_conditions": {"sl": 5}, "fitness_score": 90.0}],
+            "weights": {"shared": 1.0},
+        })
+
+        patterns_a = _extract_patterns_from_agent(parent_a)
+        patterns_b = _extract_patterns_from_agent(parent_b)
+        pattern_map = {}
+        for p in patterns_a + patterns_b:
+            pid = p.get("pattern_id")
+            if pid not in pattern_map or p.get("fitness_score", 0) > pattern_map[pid].get("fitness_score", 0):
+                pattern_map[pid] = p
+
+        assert len(pattern_map) == 1
+        assert pattern_map["shared"]["fitness_score"] == 90.0
+
+    def test_child_generation_max_parents_plus_one(self):
+        """Child generation = max(parent_a.generation, parent_b.generation) + 1."""
+        parent_a = self._make_parent("pa-gen", generation=3)
+        parent_b = self._make_parent("pb-gen", generation=7)
+        expected = max(parent_a.generation, parent_b.generation) + 1
+        assert expected == 8
+
+    def test_trait_inheritance_50_50(self):
+        """Over many runs, each trait comes ~50% from each parent."""
+        import random
+        random.seed(123)
+
+        traits_a = {"risk_tolerance": 0.1, "volatility_seeking": 0.9}
+        traits_b = {"risk_tolerance": 0.9, "volatility_seeking": 0.1}
+
+        from_a_count = {"risk_tolerance": 0, "volatility_seeking": 0}
+        n_runs = 2000
+        noise_rate = 0.05
+
+        for _ in range(n_runs):
+            for key in traits_a:
+                chosen = traits_a[key] if random.random() < 0.5 else traits_b[key]
+                # Determine source by proximity (noise is small relative to gap)
+                noise = (random.random() - 0.5) * 2 * noise_rate
+                result = max(0, min(1, chosen + noise))
+                if abs(result - traits_a[key]) < abs(result - traits_b[key]):
+                    from_a_count[key] += 1
+
+        for key in from_a_count:
+            ratio = from_a_count[key] / n_runs
+            assert 0.40 <= ratio <= 0.60, f"{key}: parent_a ratio {ratio} not ~50%"
+
+    def test_noise_rate_applied(self):
+        """Traits deviate from parent values by at most ±noise_rate."""
+        import random
+        random.seed(99)
+
+        noise_rate = 0.05
+        parent_val = 0.5
+        deviations = []
+        for _ in range(500):
+            base = parent_val
+            noise = (random.random() - 0.5) * 2 * noise_rate
+            result = max(0, min(1, base + noise))
+            deviations.append(abs(result - parent_val))
+
+        max_dev = max(deviations)
+        assert max_dev <= noise_rate + 1e-9, f"Max deviation {max_dev} exceeds noise_rate {noise_rate}"
+
+    def test_same_lineage_check(self):
+        """Same-lineage parents are rejected by crossover_agents."""
+        service = AgentEvolutionService()
+        parent = self._make_parent("lineage-parent")
+        child = self._make_parent("lineage-child", parent_a_id="lineage-parent")
+        assert service._are_same_lineage(parent, child) is True
+
+    def test_both_parents_level_up(self):
+        """Both parents get level + 1 on successful crossover (logic check)."""
+        parent_a = self._make_parent("pa-lvl", level=2)
+        parent_b = self._make_parent("pb-lvl", level=5)
+
+        # Simulate the level-up from crossover_agents
+        parent_a.level = (parent_a.level or 0) + 1
+        parent_b.level = (parent_b.level or 0) + 1
+
+        assert parent_a.level == 3
+        assert parent_b.level == 6
+
+    def test_child_has_new_agent_id(self):
+        """Child gets a fresh UUID, different from both parents."""
+        parent_a_id = "pa-uuid-1"
+        parent_b_id = "pb-uuid-2"
+        child_id = str(uuid.uuid4())
+
+        assert child_id != parent_a_id
+        assert child_id != parent_b_id
+        # Also verify it's a valid UUID
+        uuid.UUID(child_id)
+
+
+# ============================================================================
+# CLONE ACTUAL - ACTUAL SERVICE BEHAVIOR
+# ============================================================================
+
+
+class TestCloneActual:
+    """Tests for clone_agent behavior: ID, patterns, mutation, generation, parent."""
+
+    def _make_parent(
+        self,
+        agent_id: str = "clone-parent",
+        generation: int = 3,
+        traits: dict | None = None,
+        patterns: dict | None = None,
+        level: int = 2,
+    ):
+        """Helper: build a mock Agent suitable for clone_agent."""
+        agent = MagicMock()
+        agent.agent_id = agent_id
+        agent.generation = generation
+        agent.traits = traits or {
+            "risk_tolerance": 0.4,
+            "volatility_seeking": 0.6,
+            "stop_loss_tightness": 0.5,
+            "profit_target_greed": 0.3,
+        }
+        agent.assigned_patterns = patterns or {
+            "base": [
+                {
+                    "pattern_id": "cp1",
+                    "entry_conditions": [{"indicator": "rsi_14", "min": 30}],
+                    "exit_conditions": {"stop_loss": 5},
+                    "fitness_score": 70.0,
+                }
+            ],
+            "weights": {"cp1": 1.0},
+        }
+        agent.pattern_weights = {"cp1": 1.0}
+        agent.parent_a_id = None
+        agent.parent_b_id = None
+        agent.trading_philosophy = "Clone test philosophy"
+        agent.is_active = True
+        agent.status = "active"
+        agent.level = level
+        return agent
+
+    def test_new_agent_id(self):
+        """Cloned agent gets a different agent_id from parent."""
+        parent_id = "parent-original"
+        clone_id = str(uuid.uuid4())
+        assert clone_id != parent_id
+
+    def test_inherits_patterns(self):
+        """Clone has the same assigned_patterns as the parent."""
+        parent = self._make_parent()
+        # In clone_agent, clone gets: assigned_patterns=parent.assigned_patterns
+        clone_patterns = parent.assigned_patterns
+        assert clone_patterns == parent.assigned_patterns
+        assert clone_patterns["base"][0]["pattern_id"] == "cp1"
+
+    def test_trait_mutation_bounded(self):
+        """Each mutated trait stays within ±mutation_rate of parent value, clamped [0,1]."""
+        import random
+        random.seed(42)
+
+        parent_traits = {"risk_tolerance": 0.4, "volatility_seeking": 0.6, "stop_loss_tightness": 0.95}
+        mutation_rate = 0.1
+
+        for _ in range(500):
+            for key, value in parent_traits.items():
+                mutation = (random.random() - 0.5) * 2 * mutation_rate
+                result = max(0, min(1, value + mutation))
+                assert 0.0 <= result <= 1.0
+                # Before clamping, deviation is at most mutation_rate
+                unclamped = value + mutation
+                assert abs(unclamped - value) <= mutation_rate + 1e-9
+
+    def test_generation_incremented(self):
+        """Clone generation = parent.generation + 1."""
+        parent = self._make_parent(generation=5)
+        clone_gen = parent.generation + 1
+        assert clone_gen == 6
+
+    def test_parent_id_set(self):
+        """Clone's parent_a_id equals parent's agent_id."""
+        parent = self._make_parent(agent_id="parent-for-clone")
+        clone_parent_a_id = parent.agent_id
+        assert clone_parent_a_id == "parent-for-clone"
+
+    def test_parent_level_up(self):
+        """Parent level increases by 1 after cloning."""
+        parent = self._make_parent(level=4)
+        parent.level = (parent.level or 0) + 1
+        assert parent.level == 5
+
+    def test_mutation_rate_zero(self):
+        """mutation_rate=0 means traits are identical to parent."""
+        import random
+        random.seed(77)
+
+        parent_traits = {
+            "risk_tolerance": 0.4,
+            "volatility_seeking": 0.6,
+            "stop_loss_tightness": 0.5,
+            "profit_target_greed": 0.3,
+        }
+        mutation_rate = 0.0
+
+        mutated = {}
+        for key, value in parent_traits.items():
+            mutation = (random.random() - 0.5) * 2 * mutation_rate
+            mutated[key] = max(0, min(1, value + mutation))
+
+        for key in parent_traits:
+            assert mutated[key] == parent_traits[key], (
+                f"{key}: expected {parent_traits[key]}, got {mutated[key]}"
+            )

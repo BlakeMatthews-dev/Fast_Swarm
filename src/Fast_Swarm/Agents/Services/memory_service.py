@@ -364,6 +364,37 @@ async def soft_delete_memory(
     return True
 
 
+async def update_memory_weight(
+    session: AsyncSession,
+    memory_id: str,
+    new_weight: float,
+) -> AgentMemory | None:
+    """
+    Update a memory's weight directly (for LLM review).
+
+    Args:
+        session: Database session
+        memory_id: Memory to update
+        new_weight: New weight value (clamped to type bounds)
+
+    Returns:
+        Updated memory or None if not found
+    """
+    memory = await get_memory_by_id(session, memory_id)
+    if not memory:
+        return None
+
+    # Clamp to type bounds
+    mem_type = MemoryType(memory.memory_type)
+    memory.weight = clamp_weight_for_type(mem_type, new_weight)
+
+    # Update access time
+    memory.last_accessed_at = datetime.utcnow()
+
+    await session.flush()
+    return memory
+
+
 async def get_weak_memories(
     session: AsyncSession,
     agent_id: str,

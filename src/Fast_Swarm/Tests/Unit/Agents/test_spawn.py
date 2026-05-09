@@ -20,6 +20,7 @@ from Fast_Swarm.Agents.Services.spawn_service import (
     spawn_clone,
     validate_spawn_count,
 )
+from Fast_Swarm.Agents.Services.trait_service import ALL_22_TRAITS
 
 # ============================================================================
 # Test Data Helpers

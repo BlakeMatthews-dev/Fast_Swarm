@@ -825,8 +825,8 @@ class TestPatternEvolutionDeterminism:
         result2 = apply_selection_pressure(patterns)
 
         # Same input should give same culled patterns
-        culled_ids_1 = {p["pattern_id"] for p in result1["culled"]}
-        culled_ids_2 = {p["pattern_id"] for p in result2["culled"]}
+        culled_ids_1 = set(p["pattern_id"] for p in result1["culled"])
+        culled_ids_2 = set(p["pattern_id"] for p in result2["culled"])
 
         assert culled_ids_1 == culled_ids_2
 

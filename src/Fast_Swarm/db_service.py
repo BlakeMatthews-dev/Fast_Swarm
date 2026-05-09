@@ -62,8 +62,8 @@ class DatabaseService:
                 select(Pattern)
                 .where(Pattern.is_active.is_(True))
                 .where(Pattern.entry_conditions.isnot(None))
-                .where(Pattern.total_runs >= min_trades)  # Only proven patterns!
-                .where(Pattern.fitness_score >= min_fitness)
+                .where((Pattern.total_runs >= min_trades) | (Pattern.total_runs.is_(None)))
+                .where((Pattern.fitness_score >= min_fitness) | (Pattern.fitness_score.is_(None)))
             )
 
             # Filter for patterns with VALID exit conditions (not empty {} or [])

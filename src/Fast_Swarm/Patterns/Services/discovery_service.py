@@ -25,6 +25,194 @@ from Fast_Swarm.utilities import (
 from ..Models.pattern_models import Pattern
 
 
+class PatternTestContext:
+    """
+    Shared context for pattern testing — created once, reused across all patterns.
+
+    Holds the loader, config, traits, and pre-computed benchmarks.
+    No database interaction after construction.
+    """
+
+    def __init__(self, preloaded_candles=None, benchmarks: dict = None):
+        from Fast_Swarm.local_agents.backtest.data import OHLCVLoader
+        from Fast_Swarm.local_agents.backtest.engine import BacktestConfig
+        from Fast_Swarm.local_agents.core.traits import AgentTraits
+
+        self.loader = OHLCVLoader()
+        self.traits = AgentTraits()
+        self.traits.min_threshold = 0.0  # No decision zone for pattern tests
+        self.traits.ai_threshold = 0.0
+        self.config = BacktestConfig.from_traits(self.traits)
+        self.traits_dict = self.traits.__dict__
+        self.preloaded_candles = preloaded_candles
+        self.benchmarks = benchmarks or {}  # {(asset, timeframe, start_ts): float}
+
+
+def _compute_pattern_on_windows(
+    pattern_dict: dict,
+    windows: list[dict],
+    ctx: PatternTestContext,
+) -> dict:
+    """
+    Pure computation: run one pattern against all windows.
+
+    No database interaction. Uses shared context (loader, config, candles).
+    Returns dict with aggregated metrics + collected trade records.
+    """
+    import json
+    from datetime import datetime
+
+    from Fast_Swarm.local_agents.backtest.engine import LocalBacktestEngine
+    from Fast_Swarm.local_agents.core.state import AgentRecord
+    from Fast_Swarm.utilities.pattern_backtest import calculate_metrics_for_trades
+
+    pattern_id = pattern_dict.get("pattern_id", "unknown")
+    entry_str = pattern_dict.get("entry_conditions", "[]")
+    exit_str = pattern_dict.get("exit_conditions", "{}")
+
+    entry_conditions = json.loads(entry_str) if isinstance(entry_str, str) else entry_str
+    exit_config = json.loads(exit_str) if isinstance(exit_str, str) else exit_str
+
+    if not entry_conditions:
+        return {"pattern_id": pattern_id, "total_trades": 0, "windows_tested": 0, "runs": len(windows), "trades": []}
+
+    # Create engine once for this pattern (reused across windows)
+    engine_patterns = {
+        pattern_id: {
+            "pattern_id": pattern_id,
+            "entry_conditions": entry_conditions,
+            "exit_conditions": exit_config,
+        }
+    }
+
+    test_agent = AgentRecord(
+        agent_id=f"pattern_test_{pattern_id}",
+        agent_name=f"Test_{pattern_id[:20]}",
+        traits=ctx.traits_dict,
+        pattern_ids=[pattern_id],
+        pattern_weights={pattern_id: 1.0},
+    )
+
+    engine = LocalBacktestEngine(
+        loader=ctx.loader, config=ctx.config, patterns=engine_patterns,
+        preloaded_candles=ctx.preloaded_candles,
+    )
+
+    all_metrics = []
+    all_trades = []
+
+    for window in windows:
+        try:
+            asset = window.get("asset", "BTC")
+            timeframe = window.get("timeframe", "1h")
+
+            trades = engine.run(
+                agent=test_agent,
+                dataset={
+                    "assets": [asset],
+                    "timeframe": timeframe,
+                    "start_ts": window["start_ts"],
+                    "end_ts": window["end_ts"],
+                },
+            )
+
+            # Get benchmark for this window (buy-and-hold return)
+            benchmark_key = (asset, timeframe, window["start_ts"])
+            benchmark = ctx.benchmarks.get(benchmark_key, None)
+
+            if not trades:
+                # Pattern didn't trade = held cash = 0% return
+                # Alpha = 0% - benchmark (credit for avoiding crashes, penalty for missing rallies)
+                if benchmark is not None:
+                    sit_out_alpha = -benchmark  # Positive when market dropped, negative when it rallied
+                    # Fitness for sitting out: based on alpha only (no trades to evaluate risk metrics)
+                    # Capped alpha contribution: 40% weight in fitness formula
+                    sit_out_fitness = max(0, min(100, (min(100, max(-100, sit_out_alpha)) / 100) * 40))
+                    all_metrics.append({
+                        "pattern_id": pattern_id,
+                        "asset": asset,
+                        "timeframe": timeframe,
+                        "regime": window.get("regime", "random"),
+                        "total_trades": 0,
+                        "fitness_score": sit_out_fitness,
+                        "alpha_pct": sit_out_alpha,
+                        "total_pnl_pct": 0,
+                        "win_rate": 0,
+                        "sortino_ratio": 0,
+                        "sharpe_ratio": 0,
+                        "max_drawdown_pct": 0,
+                        "calmar_ratio": 0,
+                        "expectancy_pct": 0,
+                    })
+                continue
+
+            all_trades.extend(trades)
+            trade_dicts = [{"pnl_pct": t.pnl_pct} for t in trades if hasattr(t, "pnl_pct")]
+            if not trade_dicts:
+                continue
+
+            metrics = calculate_metrics_for_trades(
+                trade_dicts,
+                benchmark_return_pct=benchmark or 0.0,
+                window_name=window.get("name", "unknown"),
+                window_days=window.get("days", 0),
+            )
+            metrics["pattern_id"] = pattern_id
+            metrics["asset"] = asset
+            metrics["timeframe"] = timeframe
+            metrics["regime"] = window.get("regime", "random")
+            all_metrics.append(metrics)
+
+        except Exception as e:
+            print(f"[PatternTest] Window error for {pattern_id[:8]}: {e}")
+
+    if not all_metrics:
+        return {"pattern_id": pattern_id, "total_trades": 0, "windows_tested": 0, "runs": len(windows), "trades": all_trades}
+
+    # Aggregate across windows
+    n = len(all_metrics)
+    return {
+        "pattern_id": pattern_id,
+        "fitness": sum(r.get("fitness_score", 0) for r in all_metrics) / n,
+        "total_trades": sum(r.get("total_trades", 0) for r in all_metrics),
+        "windows_tested": n,
+        "runs": n,
+        "win_rate": sum(r.get("win_rate", 0) for r in all_metrics) / n,
+        "alpha_pct": sum(r.get("alpha_pct", 0) for r in all_metrics) / n,
+        "sortino_ratio": sum(r.get("sortino_ratio", 0) for r in all_metrics) / n,
+        "max_drawdown_pct": sum(r.get("max_drawdown_pct", 0) for r in all_metrics) / n,
+        "total_roi_pct": sum(r.get("total_pnl_pct", 0) for r in all_metrics),
+        "sharpe_ratio": sum(r.get("sharpe_ratio", 0) for r in all_metrics) / n,
+        "calmar_ratio": sum(r.get("calmar_ratio", 0) for r in all_metrics) / n,
+        "expectancy_pct": sum(r.get("expectancy_pct", 0) for r in all_metrics) / n,
+        "trades": all_trades,  # Raw trade records for batch persistence
+    }
+
+
+def _apply_result_to_pattern(pattern, result: dict):
+    """Apply computed metrics to a pattern model object (no DB write)."""
+    from datetime import datetime
+
+    if result.get("total_trades", 0) > 0:
+        pattern.fitness_score = result.get("fitness")
+        pattern.total_trades = (pattern.total_trades or 0) + result.get("total_trades", 0)
+        pattern.win_rate = result.get("win_rate")
+        pattern.alpha_pct = result.get("alpha_pct")
+        pattern.sortino_ratio = result.get("sortino_ratio")
+        pattern.max_drawdown_pct = result.get("max_drawdown_pct")
+        pattern.total_roi_pct = result.get("total_roi_pct")
+        if result.get("sharpe_ratio"):
+            pattern.sharpe_ratio = result["sharpe_ratio"]
+        if result.get("calmar_ratio"):
+            pattern.calmar_ratio = result["calmar_ratio"]
+        if result.get("expectancy_pct"):
+            pattern.expectancy_pct = result["expectancy_pct"]
+
+    pattern.total_runs = (pattern.total_runs or 0) + result.get("runs", 1)
+    pattern.periods_tested = (pattern.periods_tested or 0) + result.get("runs", 1)
+    pattern.last_backtest_at = datetime.utcnow()
+
+
 class PatternDiscoveryService:
     """Service for pattern discovery and priority-based testing."""
 
@@ -66,7 +254,6 @@ class PatternDiscoveryService:
             }
 
         import time
-
         batch_start = time.time()
         print(f"[PatternBacktest] Testing {len(patterns)} patterns across 3 assets...")
 
@@ -120,10 +307,17 @@ class PatternDiscoveryService:
                 all_results = []
                 for asset, asset_windows in windows_by_asset.items():
                     for window in asset_windows:
-                        window_results = await backtest_pattern_on_windows(
-                            session, pattern, [window], asset, window["timeframe"]
-                        )
-                        all_results.extend(window_results)
+                        try:
+                            window_results = await backtest_pattern_on_windows(
+                                session, pattern, [window], asset, window["timeframe"]
+                            )
+                            all_results.extend(window_results)
+                        except Exception as win_err:
+                            # Rollback so session stays usable for next window
+                            try:
+                                await session.rollback()
+                            except Exception:
+                                pass
 
                 pattern_elapsed = time.time() - pattern_start
                 if all_results:
@@ -146,15 +340,17 @@ class PatternDiscoveryService:
                         new_fitness=avg_fitness,
                     )
                     tested += 1
-                    print(
-                        f"fitness={avg_fitness:.1f}, trades={total_trades}, windows={len(all_results)} ({pattern_elapsed:.1f}s)"
-                    )
+                    print(f"fitness={avg_fitness:.1f}, trades={total_trades}, windows={len(all_results)} ({pattern_elapsed:.1f}s)")
                 else:
                     print(f"0 trades, 0 windows ({pattern_elapsed:.1f}s)")
                     results[pid] = {"total_trades": 0, "windows_tested": 0}
 
             except Exception as e:
                 print(f"ERROR: {e}")
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
                 results[pid] = {"error": str(e)}
 
         # Check for tier promotions
@@ -231,143 +427,76 @@ class PatternDiscoveryService:
         await session.commit()
         return promotions
 
-    async def test_pattern_on_windows(
+    def compute_pattern_results(
         self,
-        session: AsyncSession,
         pattern,
         windows: list[dict],
-        preloaded_candles: dict = None,
+        ctx: "PatternTestContext",
     ) -> dict:
         """
-        Test a single pattern on pre-loaded windows (used by orchestrator).
+        Pure computation: test a pattern on windows, return results.
 
-        This is called by the orchestrator to test patterns one at a time
-        on windows that have already been loaded. This avoids loading
-        candle data multiple times.
+        No database interaction. Uses shared PatternTestContext.
 
         Args:
-            session: Database session
-            pattern: Pattern model object
-            windows: List of window dicts with asset/timeframe/start_ts/end_ts
-            preloaded_candles: Dict of (symbol, timeframe, start_ts) -> DataFrame
+            pattern: Pattern model object (read-only)
+            windows: List of window dicts
+            ctx: Shared context with loader, config, benchmarks, candle cache
 
         Returns:
-            Dict with test results
+            Dict with computed metrics + raw trades (caller persists)
         """
         import time
 
         pattern_start = time.time()
         pid = pattern.pattern_id
 
-        # Log window details at start
         if windows:
             w = windows[0]
             window_summary = f"{w.get('asset', '?')}/{w.get('timeframe', '?')}"
             if len(windows) > 1:
-                window_summary += f" (+{len(windows) - 1} more)"
+                window_summary += f" (+{len(windows)-1} more)"
             print(f"[PatternTest] {pid[:8]}: testing on {window_summary}...")
 
-        # Convert pattern model to dict format for backtest_pattern_on_windows
         pattern_dict = {
             "pattern_id": pattern.pattern_id,
             "entry_conditions": pattern.entry_conditions,
             "exit_conditions": pattern.exit_conditions,
         }
 
-        all_results = []
-
-        for window in windows:
-            try:
-                # backtest_pattern_on_windows expects windows as list
-                window_results = await backtest_pattern_on_windows(
-                    session,
-                    pattern_dict,
-                    [window],
-                    window.get("asset", "BTC"),
-                    window.get("timeframe", "1h"),
-                    preloaded_candles=preloaded_candles,
-                )
-                all_results.extend(window_results)
-            except Exception as e:
-                print(f"[PatternTest] Window error for {pid[:8]}: {e}")
-
+        result = _compute_pattern_on_windows(pattern_dict, windows, ctx)
         pattern_elapsed = time.time() - pattern_start
 
-        if all_results:
-            # Aggregate results
-            avg_fitness = sum(r.get("fitness_score", 0) for r in all_results) / len(all_results)
-            total_trades = sum(r.get("total_trades", 0) for r in all_results)
-
-            # Extract key metrics for logging
-            avg_alpha = sum(r.get("alpha_pct", 0) for r in all_results) / len(all_results)
-            avg_sortino = sum(r.get("sortino_ratio", 0) for r in all_results) / len(all_results)
-            avg_drawdown = sum(r.get("max_drawdown_pct", 0) for r in all_results) / len(all_results)
-            avg_win_rate = sum(r.get("win_rate", 0) for r in all_results) / len(all_results)
-            total_pnl = sum(r.get("total_pnl_pct", 0) for r in all_results)
-
-            # Get window info for logging
+        trades = result.get("total_trades", 0)
+        if trades > 0:
             window_info = ""
             if windows:
                 w = windows[0]
-                asset = w.get("asset", "?")
-                tf = w.get("timeframe", "?")
-                regime = w.get("regime", "?")
-                window_info = f"{asset}/{tf} ({regime})"
-
-            # Update pattern stats
-            pattern.fitness_score = avg_fitness
-            pattern.total_runs = (pattern.total_runs or 0) + len(all_results)
-            pattern.periods_tested = (pattern.periods_tested or 0) + len(all_results)
-
-            from datetime import datetime
-
-            pattern.last_backtest_at = datetime.utcnow()
-
-            session.add(pattern)
-
-            # Enhanced logging with key fitness components
+                window_info = f"{w.get('asset', '?')}/{w.get('timeframe', '?')} ({w.get('regime', '?')})"
             print(
                 f"[PatternTest] {pid[:8]}: "
-                f"fitness={avg_fitness:.1f}, trades={total_trades}, "
-                f"α={avg_alpha:+.1f}%, sortino={avg_sortino:.2f}, "
-                f"DD={avg_drawdown:.1f}%, WR={avg_win_rate:.0f}%, "
-                f"PnL={total_pnl:+.1f}% | {window_info} ({pattern_elapsed:.1f}s)"
+                f"fitness={result.get('fitness', 0):.1f}, trades={trades}, "
+                f"α={result.get('alpha_pct', 0):+.1f}%, sortino={result.get('sortino_ratio', 0):.2f}, "
+                f"DD={result.get('max_drawdown_pct', 0):.1f}%, WR={result.get('win_rate', 0):.0f}%, "
+                f"PnL={result.get('total_roi_pct', 0):+.1f}% | {window_info} ({pattern_elapsed:.1f}s)"
             )
-
-            return {
-                "pattern_id": pid,
-                "fitness": avg_fitness,
-                "total_trades": total_trades,
-                "windows_tested": len(all_results),
-            }
         else:
-            # No windows produced results - could be: no entry signals, asset mismatch, or too few candles
             window_info = ""
-            candle_info = ""
             if windows:
                 w = windows[0]
-                asset = w.get("asset", "?")
-                tf = w.get("timeframe", "?")
-                window_info = f" | {asset}/{tf}"
+                window_info = f" | {w.get('asset', '?')}/{w.get('timeframe', '?')}"
+            print(f"[PatternTest] {pid[:8]}: 0 trades, 0 windows{window_info} ({pattern_elapsed:.1f}s)")
 
-                # Check candle count if preloaded_candles available
-                if preloaded_candles:
-                    cache_key = f"{asset}_{tf}"
-                    if cache_key in preloaded_candles:
-                        try:
-                            candles = preloaded_candles[cache_key]
-                            candle_info = f" ({len(candles)} candles)"
-                        except Exception:
-                            candle_info = " (candles err)"
-                    else:
-                        candle_info = f" (no {cache_key} in cache)"
+        return result
 
-            print(f"[PatternTest] {pid[:8]}: 0 trades, 0 windows{window_info}{candle_info} ({pattern_elapsed:.1f}s)")
-            return {
-                "pattern_id": pid,
-                "total_trades": 0,
-                "windows_tested": 0,
-            }
+    # Backward-compatible wrapper for non-orchestrator callers
+    async def test_pattern_on_windows(self, session, pattern, windows, preloaded_candles=None):
+        """Legacy wrapper that computes + persists in one call."""
+        ctx = PatternTestContext(preloaded_candles=preloaded_candles)
+        result = self.compute_pattern_results(pattern, windows, ctx)
+        _apply_result_to_pattern(pattern, result)
+        session.add(pattern)
+        return result
 
     async def _run_in_thread(self, func, *args, **kwargs):
         """Run blocking function in thread pool."""

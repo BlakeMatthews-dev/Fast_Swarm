@@ -1,0 +1,19 @@
+C:\fast_swarm\scripts\deep_analysis.py:13: DeprecationWarning: the parameter `allow_missing_columns` for `scan_parquet` is deprecated. Use the parameter `missing_columns` instead and pass one of `('insert', 'raise')`.
+(Deprecated in version 1.30.0)
+  df = pl.scan_parquet('C:/fast_swarm/data/derivatives/**/*.parquet', allow_missing_columns=True)
+Traceback (most recent call last):
+  File "C:\fast_swarm\scripts\deep_analysis.py", line 162, in <module>
+    main()
+  File "C:\fast_swarm\scripts\deep_analysis.py", line 17, in main
+    row_count = df.select(pl.len()).collect().item()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\polars\_utils\deprecation.py", line 97, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\polars\lazyframe\opt_flags.py", line 324, in wrapper
+    return function(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Admin\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python312\site-packages\polars\lazyframe\frame.py", line 2429, in collect
+    return wrap_df(ldf.collect(engine, callback))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+polars.exceptions.SchemaError: extra column in file outside of expected schema: sma_20_accel_jerk_div, hint: specify this column in the schema, or pass extra_columns='ignore' in scan options. File containing extra column: 'C:/fast_swarm/data/derivatives/symbol=1INCH/timeframe=1h/data.parquet'.

@@ -30,7 +30,7 @@ class Agent(SQLModel, table=True):
     trading_philosophy: str | None = None
 
     fitness_score: Decimal = Field(default=Decimal("0"), sa_column=Column(Numeric(18, 8)))
-    fitness_by_regime: dict[str, Any] = Field(default={}, sa_column=Column(JSONB))  # {"crash": 45.2, "bull": 72.1, ...}
+    fitness_by_regime: dict[str, Any] = Field(default={}, sa_column=Column(JSONB))  # {"regime": {"fitness": float, "trades": int, "win_rate": float}, ...}
     # 2D fitness matrix: regime × timeframe for heatmap display
     # {"crash": {"1m": 45.2, "1h": 52.1}, "bull": {"1m": 84.0, "15m": 70.0}, ...}
     fitness_matrix: dict[str, Any] = Field(default={}, sa_column=Column(JSONB))

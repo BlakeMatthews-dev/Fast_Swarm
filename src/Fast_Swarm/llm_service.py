@@ -1,116 +1,171 @@
 """
 LLM Service for Fast_Swarm.
 
-Provides async LLM calls via Ollama for:
-- Agent pattern selection (birth_selection.j2)
-- Philosophy generation (philosophy.j2)
-- AI zone decisions (ai_zone_decision.j2)
+Provides async/sync LLM calls via:
+- Conductor Router (default) — uses free cloud tokens via OpenAI-compatible API
+- Ollama (fallback) — local GPU inference
 
-Uses the centralized Ollama configuration from Fast_Swarm.local_agents.config.
+Conductor picks the best free model for the task type automatically.
+Set LLM_BACKEND=ollama to force local inference.
 """
+
+import os
 
 import httpx
 
-# Ollama config (mirrors local_agents/config.py)
-OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = "koshtenco/agi-trader-kz50-quantum:latest"
-OLLAMA_TIMEOUT = 30  # seconds
+# Backend selection: "conductor" (default) or "ollama"
+LLM_BACKEND = os.getenv("LLM_BACKEND", "conductor")
+
+# Conductor config (OpenAI-compatible API at port 8100)
+CONDUCTOR_URL = os.getenv("CONDUCTOR_URL", "http://host.docker.internal:8100")
+CONDUCTOR_KEY = os.getenv("CONDUCTOR_KEY", "sk-conductor-router-2026")
+
+# Ollama config (fallback)
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "90"))
 
 
-async def ollama_call_async(prompt: str) -> str:
-    """
-    Call Ollama API asynchronously.
-
-    Args:
-        prompt: The prompt to send to the LLM.
-
-    Returns:
-        The LLM response text.
-
-    Raises:
-        RuntimeError: If Ollama is unavailable or times out.
-    """
+def _call_conductor_sync(prompt: str) -> str:
+    """Call Conductor Router (OpenAI-compatible) synchronously."""
     payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "num_gpu": 99,  # Use all GPU layers
-            "num_ctx": 512,  # Minimal context for speed
-            "num_predict": 200,  # Allow slightly longer responses for JSON
-            "temperature": 0.1,  # Consistent decisions
-        },
+        "model": "auto",  # Conductor picks best model
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 1000,
     }
+    headers = {"Authorization": f"Bearer {CONDUCTOR_KEY}"}
 
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            response = await client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-            return result.get("response", "")
-    except httpx.TimeoutException:
-        raise RuntimeError(f"[LLMService] Ollama timeout after {OLLAMA_TIMEOUT}s")
-    except httpx.HTTPStatusError as e:
-        raise RuntimeError(f"[LLMService] Ollama HTTP error: {e.response.status_code}")
-    except httpx.ConnectError:
-        raise RuntimeError("[LLMService] Ollama not available at localhost:11434")
+    with httpx.Client(timeout=LLM_TIMEOUT) as client:
+        print(f"[LLMService] Calling Conductor ({CONDUCTOR_URL}) with {len(prompt)} char prompt...")
+        response = client.post(f"{CONDUCTOR_URL}/v1/chat/completions", json=payload, headers=headers)
+        response.raise_for_status()
+        result = response.json()
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        model_used = result.get("model", "unknown")
+        print(f"[LLMService] Conductor response: {len(content)} chars via {model_used}")
+        return content
 
 
-def ollama_call_sync(prompt: str) -> str:
-    """
-    Synchronous Ollama call using httpx sync client.
+async def _call_conductor_async(prompt: str) -> str:
+    """Call Conductor Router (OpenAI-compatible) asynchronously."""
+    payload = {
+        "model": "auto",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "max_tokens": 1000,
+    }
+    headers = {"Authorization": f"Bearer {CONDUCTOR_KEY}"}
 
-    Used by genesis.py which expects a sync function.
-    Uses synchronous httpx to avoid asyncio issues in thread pools.
+    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+        response = await client.post(f"{CONDUCTOR_URL}/v1/chat/completions", json=payload, headers=headers)
+        response.raise_for_status()
+        result = response.json()
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return content
 
-    Args:
-        prompt: The prompt to send to the LLM.
 
-    Returns:
-        The LLM response text.
-    """
+def _call_ollama_sync(prompt: str) -> str:
+    """Call Ollama API synchronously."""
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         "options": {
             "num_gpu": 99,
-            "num_ctx": 2048,  # Larger context for pattern list
-            "num_predict": 500,  # Allow longer JSON responses
+            "num_ctx": 2048,
+            "num_predict": 500,
             "temperature": 0.1,
         },
     }
 
+    with httpx.Client(timeout=LLM_TIMEOUT) as client:
+        print(f"[LLMService] Calling Ollama with {len(prompt)} char prompt...")
+        response = client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        response.raise_for_status()
+        result = response.json()
+        llm_response = result.get("response", "")
+        print(f"[LLMService] Got {len(llm_response)} char response from Ollama")
+        return llm_response
+
+
+async def _call_ollama_async(prompt: str) -> str:
+    """Call Ollama API asynchronously."""
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "num_gpu": 99,
+            "num_ctx": 512,
+            "num_predict": 200,
+            "temperature": 0.1,
+        },
+    }
+
+    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
+        response = await client.post(f"{OLLAMA_URL}/api/generate", json=payload)
+        response.raise_for_status()
+        result = response.json()
+        return result.get("response", "")
+
+
+# =============================================================================
+# Public API (same interface as before — drop-in replacement)
+# =============================================================================
+
+
+def ollama_call_sync(prompt: str) -> str:
+    """
+    Synchronous LLM call. Uses Conductor by default, falls back to Ollama.
+
+    Used by genesis.py which expects a sync function.
+    """
     try:
-        # Use synchronous httpx client - no asyncio issues!
-        with httpx.Client(timeout=OLLAMA_TIMEOUT) as client:
-            print(f"[LLMService] Calling Ollama with {len(prompt)} char prompt...")
-            response = client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-            llm_response = result.get("response", "")
-            print(f"[LLMService] Got {len(llm_response)} char response from Ollama")
-            return llm_response
-    except httpx.TimeoutException:
-        print(f"[LLMService] ERROR: Ollama timeout after {OLLAMA_TIMEOUT}s")
-        raise RuntimeError(f"Ollama timeout after {OLLAMA_TIMEOUT}s")
-    except httpx.HTTPStatusError as e:
-        print(f"[LLMService] ERROR: Ollama HTTP error: {e.response.status_code}")
-        raise RuntimeError(f"Ollama HTTP error: {e.response.status_code}")
+        if LLM_BACKEND == "conductor":
+            return _call_conductor_sync(prompt)
+    except Exception as e:
+        print(f"[LLMService] Conductor failed ({e}), falling back to Ollama")
+
+    try:
+        return _call_ollama_sync(prompt)
     except httpx.ConnectError:
-        print("[LLMService] ERROR: Ollama not available at localhost:11434")
-        raise RuntimeError("Ollama not available at localhost:11434")
+        raise RuntimeError("[LLMService] Neither Conductor nor Ollama available")
+    except httpx.TimeoutException:
+        raise RuntimeError(f"[LLMService] LLM timeout after {LLM_TIMEOUT}s")
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"[LLMService] LLM HTTP error: {e.response.status_code}")
+
+
+async def ollama_call_async(prompt: str) -> str:
+    """
+    Async LLM call. Uses Conductor by default, falls back to Ollama.
+    """
+    try:
+        if LLM_BACKEND == "conductor":
+            return await _call_conductor_async(prompt)
+    except Exception as e:
+        print(f"[LLMService] Conductor failed ({e}), falling back to Ollama")
+
+    try:
+        return await _call_ollama_async(prompt)
+    except httpx.ConnectError:
+        raise RuntimeError("[LLMService] Neither Conductor nor Ollama available")
+    except httpx.TimeoutException:
+        raise RuntimeError(f"[LLMService] LLM timeout after {LLM_TIMEOUT}s")
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"[LLMService] LLM HTTP error: {e.response.status_code}")
 
 
 async def check_ollama_available() -> bool:
-    """Check if Ollama is running and the model is loaded."""
+    """Check if LLM backend is available."""
     try:
+        if LLM_BACKEND == "conductor":
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.get(f"{CONDUCTOR_URL}/health")
+                return response.status_code == 200
+
         async with httpx.AsyncClient(timeout=5) as client:
             response = await client.get(f"{OLLAMA_URL}/api/tags")
             if response.status_code == 200:

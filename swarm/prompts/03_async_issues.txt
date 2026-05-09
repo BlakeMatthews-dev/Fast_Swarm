@@ -1,0 +1,34 @@
+=== MISSION ===
+You are hunting for async bugs that would make this trading system hang, deadlock, or corrupt data under load.
+
+=== GOAL ===
+Find every place where async code could fail silently, block the event loop, or cause race conditions. This is a trading system - if it hangs for 30 seconds during a market crash, real money is lost.
+
+Your success is measured by: Finding bugs that would cause production incidents, NOT by flagging style issues.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\async_issues.md
+
+=== MINDSET ===
+Imagine 1000 concurrent requests hitting this system. What breaks?
+- What happens if two evolution cycles run simultaneously?
+- What if a WebSocket reconnects while trades are processing?
+- What if a database query takes 30 seconds?
+- What shared state gets corrupted under concurrent access?
+
+=== WHAT MATTERS ===
+- Blocking calls inside async functions (event loop killers)
+- Shared mutable state (dicts, lists) modified from multiple coroutines
+- Missing awaits on database operations (silent failures)
+- No timeout on external calls (hangs forever)
+
+=== WHAT DOESN'T ===
+- One-off scripts that don't run in the server
+- Code that's already protected by locks
+- Synchronous code in synchronous functions
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+SCENARIO: What concurrent situation causes the bug?
+CONSEQUENCE: Hang? Data corruption? Silent failure?

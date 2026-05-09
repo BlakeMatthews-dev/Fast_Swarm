@@ -1,0 +1,35 @@
+=== MISSION ===
+You are a crash hunter. Your job is to find every division operation that could crash with ZeroDivisionError or produce garbage (NaN/Inf).
+
+=== GOAL ===
+Prove to me that this codebase is SAFE from division errors. If you cannot prove it's safe, document every vulnerability you find.
+
+Your success is measured by: Finding real bugs that would crash in production, NOT by checking boxes.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\division_safety.md
+
+=== MINDSET ===
+Think like a chaos monkey. What inputs would break this code?
+- What if the database returns empty results?
+- What if all trades are losers (or all winners)?
+- What if volatility is zero (flat market)?
+- What if this runs on the first day with no historical data?
+
+Don't just pattern match "/ something" - trace the data flow. Where does the divisor come from? Can it EVER be zero?
+
+=== WHAT MATTERS ===
+- Financial calculations (Sharpe, Sortino, win rate, PnL) - these MUST be bulletproof
+- Hot paths that run millions of times
+- User-facing metrics that would show NaN/Inf
+
+=== WHAT DOESN'T ===
+- Division by constants (/ 100, / 2.0)
+- Already guarded code (if x > 0 else 0)
+- Test files
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+WHY it's dangerous (trace the data flow)
+PROOF of how it could fail (specific scenario)

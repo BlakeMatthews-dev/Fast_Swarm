@@ -98,6 +98,32 @@ class EnhancedCandle(SQLModel, table=True):
     cmf_20: float | None = None
     mfi_14: float | None = None
 
+    # Aroon
+    aroon_up: float | None = None
+    aroon_down: float | None = None
+    aroon_osc: float | None = None
+
+    # Additional momentum indicators
+    cci_14: float | None = None  # Commodity Channel Index
+    willr_14: float | None = None  # Williams %R
+    roc_10: float | None = None  # Rate of Change
+    trix_14: float | None = None  # TRIX
+    cmo_14: float | None = None  # Chande Momentum Oscillator
+    emv_14: float | None = None  # Ease of Movement
+    vhf_28: float | None = None  # Vertical Horizontal Filter
+    mom_10: float | None = None  # Momentum (10-period)
+    tsi: float | None = None  # True Strength Index
+    tsi_signal: float | None = None  # TSI signal line
+    smi: float | None = None  # Stochastic Momentum Index
+    dpo: float | None = None  # Detrended Price Oscillator
+    massi: float | None = None  # Mass Index
+    linreg_slope: float | None = None  # Linear Regression Slope
+    zscore_50: float | None = None  # Z-Score (50-period)
+    uo: float | None = None  # Ultimate Oscillator
+    fisher: float | None = None  # Fisher Transform
+    fisher_signal: float | None = None  # Fisher Transform Signal
+    supertrend_direction: int | None = None  # SuperTrend direction (1=up, -1=down)
+
     # Sentiment/Regime
     fear_greed_value: float | None = None
     fear_greed_class: str | None = None
@@ -181,6 +207,31 @@ class EnhancedCandle(SQLModel, table=True):
     high_volume: int | None = None  # Volume > 1.5x SMA(20)
     low_volume: int | None = None  # Volume < 0.5x SMA(20)
 
+    # ==========================================================================
+    # MOTION DERIVATIVES (for Bear Protection)
+    # These track velocity, acceleration, and jerk of price/indicators.
+    # Used by BearProtectionService for regime detection.
+    # ==========================================================================
+
+    # Price motion derivatives (z-scores, 21-period rolling)
+    close_velocity_zscore: float | None = None  # 1st derivative of close
+    close_acceleration_zscore: float | None = None  # 2nd derivative of close
+    close_jerk_zscore: float | None = None  # 3rd derivative of close
+
+    # ADX motion derivatives (z-scores)
+    adx_14_velocity_zscore: float | None = None  # 1st derivative of ADX
+    adx_14_acceleration_zscore: float | None = None  # 2nd derivative of ADX
+    adx_14_jerk_zscore: float | None = None  # 3rd derivative of ADX
+
+    # ==========================================================================
+    # BEAR PROTECTION TRIGGERS (pre-computed boolean signals)
+    # These are the final CTC (Crash-to-Cash) signals ready for use.
+    # ==========================================================================
+
+    # Single-TF defensive trigger: acc < -1.5 AND adx_jerk < -0.5
+    # Use with multi-TF confirmation: BOTH 1h AND 4h must be true
+    defensive_trigger: int | None = None  # 1 = danger signal, 0 = safe
+
     # Metadata
     enriched_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
     derived_computed_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True)))
@@ -238,7 +289,7 @@ class OrderBookSnapshot(SQLModel, table=True):
 class BacktestWindow(SQLModel, table=True):
     """
     Pre-computed backtest windows cached for fast startup.
-
+    
     Cached from windows.py generate_pool() to avoid recomputation on every launch.
     Invalidated when data ranges change (checked against max data timestamp).
     """
@@ -259,5 +310,48 @@ class BacktestWindow(SQLModel, table=True):
     __table_args__ = (
         Index("ix_backtest_window_pair", "symbol", "timeframe"),
         Index("ix_backtest_window_range", "start_ts", "end_ts"),
+        {"extend_existing": True},
+    )
+
+
+class PaperTrade(SQLModel, table=True):
+    """
+    Paper trading trade history for persistence.
+
+    Records all paper trades executed by PaperTradingClient for:
+    - Trade history persistence across restarts
+    - Performance analysis
+    - Audit trail
+    """
+
+    __tablename__ = "paper_trades"
+
+    id: int | None = Field(default=None, primary_key=True)
+    order_id: str = Field(index=True)  # Matches PaperTradingClient order_id
+    agent_id: str | None = Field(default=None, index=True)  # Optional: link to agent
+
+    # Trade details
+    symbol: str = Field(index=True)
+    side: str  # "buy" or "sell"
+    size: Decimal = Field(sa_column=Column(Numeric(18, 8)))
+    price: Decimal = Field(sa_column=Column(Numeric(18, 8)))
+    commission: Decimal = Field(sa_column=Column(Numeric(18, 8)))
+
+    # Timing
+    filled_at: datetime = Field(sa_column=Column(DateTime(timezone=True), index=True))
+    created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=Column(DateTime(timezone=True)))
+
+    # P&L tracking (for sells)
+    entry_price: Decimal | None = Field(default=None, sa_column=Column(Numeric(18, 8)))
+    realized_pnl: Decimal | None = Field(default=None, sa_column=Column(Numeric(18, 8)))
+
+    # Partial close tracking
+    is_partial: bool = Field(default=False)
+    close_fraction: float | None = Field(default=None)
+    parent_order_id: str | None = Field(default=None, index=True)
+
+    __table_args__ = (
+        Index("ix_paper_trade_symbol_time", "symbol", "filled_at"),
+        Index("ix_paper_trade_agent", "agent_id", "filled_at"),
         {"extend_existing": True},
     )

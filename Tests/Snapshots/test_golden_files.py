@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from Agents.Services.fitness_service import calculate_fitness
+from Fast_Swarm.Agents.Services.fitness_service import calculate_fitness
 from Tests.Fixtures.canonical_agents import CANONICAL_AGENTS
 from Tests.Fixtures.factories import TradeFactory
 

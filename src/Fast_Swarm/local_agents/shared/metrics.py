@@ -12,6 +12,12 @@ Calculates performance metrics used in fitness scoring:
 import math
 from dataclasses import dataclass
 
+from Fast_Swarm.Metrics.metrics_engine import (
+    calculate_sortino as _qs_sortino,
+    calculate_max_drawdown as _qs_max_drawdown,
+    calculate_sharpe as _qs_sharpe,
+)
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -39,12 +45,12 @@ def calculate_sortino_ratio(returns: list[float], target: float = 0.0, annualiza
     """
     Calculate Sortino ratio (risk-adjusted return using downside deviation).
 
-    Sortino = (Mean Return - Target) / Downside Deviation
+    Delegates to QuantStats-backed Metrics engine for correct calculation.
 
     Args:
         returns: List of period returns (as decimals, e.g., 0.02 for 2%).
         target: Minimum acceptable return (default 0).
-        annualization_factor: Factor for annualizing (252 for daily, 52 for weekly).
+        annualization_factor: Ignored (QuantStats handles annualization internally).
 
     Returns:
         Sortino ratio (capped at reasonable bounds).
@@ -52,30 +58,10 @@ def calculate_sortino_ratio(returns: list[float], target: float = 0.0, annualiza
     if not returns or len(returns) < 2:
         return 0.0
 
-    # Calculate mean return
-    mean_return = sum(returns) / len(returns)
-
-    # Calculate downside deviation (only negative deviations from target)
-    downside_returns = [min(0, r - target) for r in returns]
-    downside_squared = [r**2 for r in downside_returns]
-
-    if not downside_squared:
-        return 0.0
-
-    downside_variance = sum(downside_squared) / len(downside_squared)
-    downside_deviation = math.sqrt(downside_variance)
-
-    if downside_deviation < 0.0001:
-        # No downside risk - cap at reasonable max
-        return 4.0 if mean_return > target else 0.0
-
-    sortino = (mean_return - target) / downside_deviation
-
-    # Annualize
-    sortino_annualized = sortino * math.sqrt(annualization_factor)
+    sortino = _qs_sortino(returns, target=target)
 
     # Cap at reasonable bounds
-    return max(-4.0, min(4.0, sortino_annualized))
+    return max(-4.0, min(4.0, sortino))
 
 
 # =============================================================================
@@ -115,23 +101,20 @@ def calculate_max_drawdown(equity_curve: list[float]) -> float:
 
 def calculate_max_drawdown_from_returns(returns: list[float]) -> float:
     """
-    Calculate max drawdown from returns (builds equity curve internally).
+    Calculate max drawdown from returns.
+
+    Delegates to QuantStats-backed Metrics engine.
 
     Args:
         returns: List of period returns as decimals.
 
     Returns:
-        Max drawdown as decimal.
+        Max drawdown as decimal (0.15 = 15%).
     """
     if not returns:
         return 0.0
 
-    # Build equity curve from returns
-    equity = [1.0]  # Start at 1.0
-    for r in returns:
-        equity.append(equity[-1] * (1 + r))
-
-    return calculate_max_drawdown(equity)
+    return _qs_max_drawdown(returns)
 
 
 # =============================================================================
@@ -379,12 +362,12 @@ def calculate_sharpe_ratio(
     """
     Calculate Sharpe ratio.
 
-    Sharpe = (Mean Return - Risk Free Rate) / Std Dev
+    Delegates to QuantStats-backed Metrics engine.
 
     Args:
         returns: List of period returns.
         risk_free_rate: Risk-free rate per period.
-        annualization_factor: Factor for annualizing.
+        annualization_factor: Ignored (QuantStats handles annualization internally).
 
     Returns:
         Sharpe ratio (capped at reasonable bounds).
@@ -392,22 +375,10 @@ def calculate_sharpe_ratio(
     if not returns or len(returns) < 2:
         return 0.0
 
-    mean_return = sum(returns) / len(returns)
-
-    # Calculate standard deviation
-    variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
-    std_dev = math.sqrt(variance)
-
-    if std_dev < 0.0001:
-        return 0.0
-
-    sharpe = (mean_return - risk_free_rate) / std_dev
-
-    # Annualize
-    sharpe_annualized = sharpe * math.sqrt(annualization_factor)
+    sharpe = _qs_sharpe(returns, risk_free_rate=risk_free_rate)
 
     # Cap at reasonable bounds
-    return max(-4.0, min(4.0, sharpe_annualized))
+    return max(-4.0, min(4.0, sharpe))
 
 
 # =============================================================================

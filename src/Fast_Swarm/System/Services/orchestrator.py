@@ -22,17 +22,16 @@ This prevents:
 """
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 class PipelinePhase(Enum):
     """Current phase of the backtest pipeline."""
-
     IDLE = "idle"
     LOADING_WINDOWS = "loading_windows"
     TESTING_PATTERNS = "testing_patterns"
@@ -45,7 +44,6 @@ class PipelinePhase(Enum):
 @dataclass
 class PipelineState:
     """Current state of the orchestrator pipeline."""
-
     phase: PipelinePhase = PipelinePhase.IDLE
     started_at: datetime | None = None
 
@@ -150,8 +148,10 @@ class BacktestOrchestrator:
 
         if self._task:
             self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await self._task
+            except asyncio.CancelledError:
+                pass
 
         self.state.phase = PipelinePhase.IDLE
         print("[Orchestrator] Stopped")
@@ -197,9 +197,7 @@ class BacktestOrchestrator:
                     self.state.last_cycle_at = datetime.utcnow()
                     self.state.consecutive_errors = 0
 
-                    print(
-                        f"[Orchestrator] Cycle {self.state.cycles_completed} complete ({windows_tested} windows tested)"
-                    )
+                    print(f"[Orchestrator] Cycle {self.state.cycles_completed} complete ({windows_tested} windows tested)")
 
                     # Cooldown before next cycle
                     await self._phase_cooldown()
@@ -250,16 +248,36 @@ class BacktestOrchestrator:
 
         self.state.windows_loaded = len(self._current_windows)
 
-        # TRUE LAZY LOADING: Create cache but DON'T load candles yet
-        # Candles load on-demand when each window is actually tested
+        # Load candles (triggers enrichment for unenriched data)
         if self._current_windows:
             self._preloaded_candles = LazyCandleCache(pool_windows)
+            # Pre-warm the cache — this triggers enrichment if needed
+            # so by the time patterns run, data is ready
+            w = pool_windows[0]
+            cache_key = f"{w.symbol}_{w.timeframe}"
+            try:
+                df = self._preloaded_candles[cache_key]
+                # Check if enrichment produced usable indicators
+                has_indicators = "rsi_14" in df.columns and df["rsi_14"].notna().sum() > 50
+                if not has_indicators:
+                    print(f"[Orchestrator] Window {w.symbol}/{w.timeframe} has no enriched indicators — skipping pattern tests")
+                    self._current_windows = []  # Empty = phase 2 skips
+                    return
+            except Exception as e:
+                print(f"[Orchestrator] Cache warm failed: {e}")
 
-        stats = get_pool_stats()
-        print(f"[Orchestrator] Loaded {len(self._current_windows)} windows (candles load per-window on demand)")
+        sym = f"{pool_windows[0].symbol}/{pool_windows[0].timeframe}" if pool_windows else "none"
+        print(f"[Orchestrator] Loaded {len(self._current_windows)} windows: {sym}")
 
     async def _phase_test_patterns(self, session: AsyncSession):
-        """Phase 2: Test patterns on current windows with watchdog protection."""
+        """Phase 2: Test patterns on current windows.
+
+        Architecture: compute-then-write.
+        1. Load all patterns from DB (one query)
+        2. Run all pattern evaluations (pure computation, no DB writes)
+        3. Collect results in memory
+        4. Write everything back in one batch
+        """
         self.state.phase = PipelinePhase.TESTING_PATTERNS
         self.state.watchdog_killed_phase = False
         print("[Orchestrator] Phase 2: Testing patterns...")
@@ -267,8 +285,9 @@ class BacktestOrchestrator:
         from sqlmodel import select
 
         from Fast_Swarm.Patterns.Models.pattern_models import Pattern
+        from Fast_Swarm.Patterns.Services.discovery_service import PatternDiscoveryService
 
-        # Get patterns that need testing (priority queue)
+        # 1. LOAD: Get patterns that need testing (one query)
         result = await session.execute(
             select(Pattern)
             .where(Pattern.is_active.is_(True))
@@ -287,90 +306,148 @@ class BacktestOrchestrator:
             print("[Orchestrator] No patterns to test")
             return
 
-        # Test patterns in parallel batches WITH WATCHDOG
-        from Fast_Swarm.Patterns.Services.discovery_service import PatternDiscoveryService
+        # 2a. PRE-COMPUTE: Benchmarks for each window (one DB query per window)
+        from Fast_Swarm.Patterns.Services.discovery_service import (
+            PatternTestContext,
+            _apply_result_to_pattern,
+        )
 
+        benchmarks = {}
+        for w in self._current_windows:
+            try:
+                asset, tf = w.get("asset", "BTC"), w.get("timeframe", "1h")
+                result = await session.execute(
+                    text("""
+                        SELECT close FROM enhanced_candles
+                        WHERE symbol = :asset AND timeframe = :tf
+                          AND EXTRACT(EPOCH FROM time) * 1000 >= :start
+                          AND EXTRACT(EPOCH FROM time) * 1000 <= :end
+                        ORDER BY time LIMIT 1
+                    """),
+                    {"asset": asset, "tf": tf, "start": w["start_ts"], "end": w["end_ts"]},
+                )
+                start_row = result.fetchone()
+                result = await session.execute(
+                    text("""
+                        SELECT close FROM enhanced_candles
+                        WHERE symbol = :asset AND timeframe = :tf
+                          AND EXTRACT(EPOCH FROM time) * 1000 >= :start
+                          AND EXTRACT(EPOCH FROM time) * 1000 <= :end
+                        ORDER BY time DESC LIMIT 1
+                    """),
+                    {"asset": asset, "tf": tf, "start": w["start_ts"], "end": w["end_ts"]},
+                )
+                end_row = result.fetchone()
+                if start_row and end_row and float(start_row[0]) > 0:
+                    bh = ((float(end_row[0]) - float(start_row[0])) / float(start_row[0])) * 100
+                    benchmarks[(asset, tf, w["start_ts"])] = bh
+            except Exception:
+                pass  # Benchmark defaults to 0 if query fails
+
+        # 2b. CREATE: Shared context (one loader, one config, shared candle cache)
+        ctx = PatternTestContext(
+            preloaded_candles=self._preloaded_candles,
+            benchmarks=benchmarks,
+        )
+
+        # 2c. COMPUTE: Run all patterns (pure computation, no DB writes)
         service = PatternDiscoveryService()
         semaphore = asyncio.Semaphore(self.PARALLEL_TESTS)
-
-        # Track results for summary
+        collected_results = []  # (pattern, result_dict) pairs
         zero_trade_count = 0
         tested_count = 0
         watchdog_triggered = False
 
         async def test_one_pattern(pattern, idx: int):
-            """Test single pattern with timeout to prevent freezing."""
+            """Test single pattern — pure computation, no DB."""
             nonlocal zero_trade_count, tested_count, watchdog_triggered
             async with semaphore:
                 if not self._running or watchdog_triggered:
-                    return {"status": "stopped"}
+                    return
 
                 try:
-                    # Apply timeout to prevent hanging on any single pattern
                     result = await asyncio.wait_for(
-                        service.test_pattern_on_windows(
-                            session,
+                        asyncio.to_thread(
+                            service.compute_pattern_results,
                             pattern,
                             self._current_windows,
-                            preloaded_candles=self._preloaded_candles,
+                            ctx,
                         ),
                         timeout=self.PATTERN_TIMEOUT_SECONDS,
                     )
 
                     tested_count += 1
                     self.state.patterns_tested = tested_count
-                    self.state.last_progress_at = datetime.utcnow()  # Update watchdog
+                    self.state.last_progress_at = datetime.utcnow()
 
-                    # Track zero-trade patterns for diagnostics
                     trades = result.get("total_trades", 0) if result else 0
                     if trades == 0:
                         zero_trade_count += 1
 
-                    return {"status": "ok", "trades": trades}
+                    collected_results.append((pattern, result))
 
-                except TimeoutError:
+                except asyncio.TimeoutError:
                     self.state.patterns_skipped_timeout += 1
-                    self.state.last_progress_at = datetime.utcnow()  # Timeout is still progress
-                    print(
-                        f"[Orchestrator] TIMEOUT: Pattern {pattern.pattern_id[:8]} exceeded {self.PATTERN_TIMEOUT_SECONDS}s"
-                    )
-                    return {"status": "timeout"}
+                    self.state.last_progress_at = datetime.utcnow()
+                    collected_results.append((pattern, {"status": "timeout", "runs": 1}))
+                    print(f"[Orchestrator] TIMEOUT: Pattern {pattern.pattern_id[:8]} exceeded {self.PATTERN_TIMEOUT_SECONDS}s")
                 except Exception as e:
-                    self.state.last_progress_at = datetime.utcnow()  # Error is still progress
+                    self.state.last_progress_at = datetime.utcnow()
                     print(f"[Orchestrator] Error testing pattern {pattern.pattern_id[:8]}: {e}")
-                    return {"status": "error", "error": str(e)}
 
         async def watchdog():
             """Kill the phase if no progress for PHASE_WATCHDOG_SECONDS."""
             nonlocal watchdog_triggered
             while not watchdog_triggered and self._running:
-                await asyncio.sleep(30)  # Check every 30 seconds
-
+                await asyncio.sleep(30)
                 if self.state.last_progress_at:
                     elapsed = (datetime.utcnow() - self.state.last_progress_at).total_seconds()
                     if elapsed > self.PHASE_WATCHDOG_SECONDS:
                         watchdog_triggered = True
                         self.state.watchdog_killed_phase = True
-                        print("")
-                        print("=" * 70)
-                        print("🚨 CRITICAL: WATCHDOG TRIGGERED - PHASE KILLED 🚨")
-                        print(f"   No progress for {elapsed:.0f}s (limit: {self.PHASE_WATCHDOG_SECONDS}s)")
-                        print(f"   Tested {tested_count}/{self.state.patterns_total} patterns before freeze")
-                        print(f"   Phase: {self.state.phase.value}")
-                        print("   Moving to next phase...")
-                        print("=" * 70)
-                        print("")
+                        print(f"[Orchestrator] WATCHDOG: No progress for {elapsed:.0f}s — killing phase")
                         return
 
-        # Start watchdog and pattern tests concurrently
         watchdog_task = asyncio.create_task(watchdog())
-
         try:
-            results = await asyncio.gather(*[test_one_pattern(p, i) for i, p in enumerate(patterns)])
+            await asyncio.gather(*[test_one_pattern(p, i) for i, p in enumerate(patterns)])
         finally:
             watchdog_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await watchdog_task
+            except asyncio.CancelledError:
+                pass
+
+        # 3. WRITE: Apply all results and persist in one transaction
+        if collected_results:
+            total_trades_persisted = 0
+            for pattern, result in collected_results:
+                _apply_result_to_pattern(pattern, result)
+                session.add(pattern)
+
+            # Collect and persist all trade records from all patterns
+            all_trade_records = []
+            for _, result in collected_results:
+                trade_records = result.get("trades", [])
+                if trade_records:
+                    all_trade_records.extend(trade_records)
+
+            if all_trade_records:
+                try:
+                    from Fast_Swarm.Trades.Services.trade_service import persist_backtest_trades
+                    total_trades_persisted = await persist_backtest_trades(
+                        session, all_trade_records, source="pattern_backtest"
+                    )
+                except Exception as e:
+                    print(f"[Orchestrator] Trade persist error: {e}")
+
+            try:
+                await session.commit()
+                trades_with_results = sum(1 for _, r in collected_results if r.get("total_trades", 0) > 0)
+                print(f"[Orchestrator] Persisted {len(collected_results)} patterns ({trades_with_results} with trades, {total_trades_persisted} trade records)")
+            except Exception as e:
+                print(f"[Orchestrator] Batch commit error: {e}")
+                await session.rollback()
 
         await session.commit()
 
@@ -388,15 +465,19 @@ class BacktestOrchestrator:
         print(summary)
 
     async def _phase_test_agents(self, session: AsyncSession):
-        """Phase 3: Test agents on current windows (same windows as patterns!)."""
+        """Phase 3: Test agents on current windows (compute-then-write).
+
+        Architecture: ONE batch read → parallel pure compute (no DB) → ONE batch write.
+        This prevents the concurrent session bug where N agents write to one session.
+        """
         self.state.phase = PipelinePhase.TESTING_AGENTS
-        print("[Orchestrator] Phase 3: Testing agents...")
+        print("[Orchestrator] Phase 3: Testing agents (compute-then-write)...")
 
         from sqlmodel import select
 
         from Fast_Swarm.Agents.Models.agent_models import Agent
 
-        # Get agents that need testing
+        # ── BATCH READ: Load agents + hydrate patterns ────────────────
         result = await session.execute(
             select(Agent)
             .where(Agent.is_active.is_(True))
@@ -412,29 +493,100 @@ class BacktestOrchestrator:
             print("[Orchestrator] No agents to test")
             return
 
-        # Test agents in parallel batches
+        # Pre-hydrate all pattern references in one batch query
+        from Fast_Swarm.Patterns.Models.pattern_models import Pattern
+
+        all_ref_ids = set()
+        for agent in agents:
+            assigned = agent.assigned_patterns or {}
+            if isinstance(assigned, dict):
+                for p in assigned.get("base", []):
+                    if isinstance(p, str):
+                        all_ref_ids.add(p)
+                    elif isinstance(p, dict) and not (p.get("entry_conditions") and p.get("exit_conditions")):
+                        pid = p.get("pattern_id", p.get("id", ""))
+                        if pid:
+                            all_ref_ids.add(pid)
+            elif isinstance(assigned, list):
+                for item in assigned:
+                    if isinstance(item, str):
+                        all_ref_ids.add(item)
+
+        pattern_cache = {}
+        if all_ref_ids:
+            pat_result = await session.execute(
+                select(Pattern).where(Pattern.pattern_id.in_(list(all_ref_ids)))
+            )
+            for p in pat_result.scalars().all():
+                pattern_cache[p.pattern_id] = {
+                    "pattern_id": p.pattern_id,
+                    "name": p.name,
+                    "entry_conditions": p.entry_conditions,
+                    "exit_conditions": p.exit_conditions,
+                }
+            print(f"[Orchestrator] Pre-hydrated {len(pattern_cache)} patterns for {len(agents)} agents")
+
+        # ── PARALLEL COMPUTE: No DB access ────────────────────────────
         from Fast_Swarm.Agents.Services.backtest_service import AgentBacktestService
 
         service = AgentBacktestService()
         semaphore = asyncio.Semaphore(self.PARALLEL_TESTS)
+        computed_results = []  # List of (agent, result_dict) or (agent, Exception)
 
-        async def test_one_agent(agent):
+        async def compute_one_agent(agent):
+            """Pure compute — no session access."""
             async with semaphore:
                 if not self._running:
-                    return
+                    return agent, {"skipped": True}
                 try:
-                    await service.backtest_agent_on_windows(
-                        session,
+                    result = await service.backtest_agent_on_windows_compute(
                         agent,
                         self._current_windows,
                         preloaded_candles=self._preloaded_candles,
+                        pattern_cache=pattern_cache,
                     )
-                    self.state.agents_tested += 1
+                    return agent, result
                 except Exception as e:
-                    print(f"[Orchestrator] Error testing agent {agent.agent_id}: {e}")
+                    print(f"[Orchestrator] Error computing agent {agent.agent_id}: {e}")
+                    return agent, {"error": str(e)}
 
-        # Run all agent tests with concurrency limit
-        await asyncio.gather(*[test_one_agent(a) for a in agents])
+        raw_results = await asyncio.gather(
+            *[compute_one_agent(a) for a in agents],
+            return_exceptions=True,
+        )
+
+        for r in raw_results:
+            if isinstance(r, Exception):
+                print(f"[Orchestrator] Agent compute exception: {r}")
+                continue
+            computed_results.append(r)
+
+        # ── BATCH WRITE: Apply all results to DB ──────────────────────
+        from datetime import datetime
+        from decimal import Decimal
+
+        for agent, result in computed_results:
+            if result.get("error") or result.get("skipped"):
+                continue
+
+            agent.fitness_score = float(result.get("fitness", 0.0))
+            agent.sortino_ratio = result.get("sortino")
+            agent.win_rate = result.get("win_rate")
+            agent.total_trades = int(agent.total_trades or 0) + int(result.get("total_trades", 0))
+            agent.winning_trades = int(agent.winning_trades or 0) + int(result.get("winning_trades", 0))
+            agent.total_pnl = Decimal(str(float(agent.total_pnl or 0) + float(result.get("total_pnl", 0))))
+            agent.backtest_count = int(agent.backtest_count or 0) + 1
+            agent.last_backtest_at = datetime.utcnow()
+
+            # Persist hydrated patterns if they were resolved from refs
+            if result.get("hydrated_patterns"):
+                agent.assigned_patterns = {"base": result["hydrated_patterns"]}
+
+            # Per-regime fitness
+            if result.get("fitness_by_regime"):
+                agent.fitness_by_regime = result["fitness_by_regime"]
+
+            self.state.agents_tested += 1
 
         await session.commit()
         print(f"[Orchestrator] Tested {self.state.agents_tested}/{self.state.agents_total} agents")

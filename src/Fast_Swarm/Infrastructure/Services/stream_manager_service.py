@@ -81,11 +81,20 @@ class StreamManagerService:
         """Gracefully stop all streams."""
         self._running = False
         for name, client in self.clients.items():
-            await client.disconnect()
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
 
         for task in self._tasks:
             task.cancel()
 
+        # Wait for cancelled tasks to finish (prevents WinError 10038 on Windows
+        # where select() fails on already-closed sockets during event loop teardown)
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        self._tasks.clear()
         logger.info("StreamManagerService stopped.")
 
     def _handle_trade(self, trade: NormalizedTrade):

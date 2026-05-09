@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from Agents.Services.fitness_service import TradeData
+from Fast_Swarm.Agents.Services.fitness_service import TradeData
 
 # =============================================================================
 # NAMED CONSTANTS (NO MAGIC NUMBERS)

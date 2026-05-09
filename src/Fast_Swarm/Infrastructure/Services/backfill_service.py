@@ -586,7 +586,10 @@ class BackfillService:
 
         # Process each symbol/timeframe combo one at a time
         # Priority order: TRIO first, then by timeframe importance
-        priority_symbols = [s for s in symbols if s in TRIO_ASSETS] + [s for s in symbols if s not in TRIO_ASSETS]
+        priority_symbols = (
+            [s for s in symbols if s in TRIO_ASSETS]
+            + [s for s in symbols if s not in TRIO_ASSETS]
+        )
 
         for symbol in priority_symbols:
             if not self._running:
@@ -618,7 +621,8 @@ class BackfillService:
 
                         if inserted > 0:
                             logger.info(
-                                f"✓ [{task.symbol}] {task.timeframe}: +{inserted:,} candles ({skipped} skipped)"
+                                f"✓ [{task.symbol}] {task.timeframe}: "
+                                f"+{inserted:,} candles ({skipped} skipped)"
                             )
 
                     except Exception as e:

@@ -20,7 +20,7 @@ from datetime import timedelta
 from hypothesis import Phase, assume, given, settings
 from hypothesis import strategies as st
 
-from Agents.Services.fitness_service import (
+from Fast_Swarm.Agents.Services.fitness_service import (
     calculate_ev,
     calculate_ev_multiplier,
     calculate_fitness,

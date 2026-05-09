@@ -1,0 +1,39 @@
+=== MISSION ===
+You are hunting for LOOKAHEAD BIAS - the cardinal sin of backtesting. This is when the backtest "cheats" by using future information to make decisions.
+
+=== GOAL ===
+Find EVERY instance where the backtest uses data it wouldn't have at decision time. Even ONE lookahead bug invalidates all backtest results.
+
+Your success is measured by: Finding time-travel bugs. This is the most important audit.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\lookahead_bias.md
+
+=== MINDSET ===
+At any point in the backtest, ask: "Would a real trader have this information RIGHT NOW?"
+
+Common lookahead bugs:
+- Using candle CLOSE price for entry decision made at close (you'd need to decide BEFORE close)
+- Accessing candles[i+1] or any future index
+- Indicators that use "future" data in their window
+- Knowing the trade outcome before deciding to enter
+
+=== TIME TRAVEL DETECTORS ===
+- candles[i+1], candles[i+n] - FUTURE DATA
+- Entry at close when signal is AT close - TIME MACHINE
+- max(candles[i:i+10]) - FUTURE WINDOW
+- Using trade result to decide entry - PARADOX
+
+=== QUESTIONS TO ANSWER ===
+- When a signal fires, what price do we enter at?
+- Can any indicator see future candles?
+- Is stop loss set using future prices?
+- Does pattern matching use data beyond current candle?
+
+=== FORMAT ===
+ALL lookahead findings are CRITICAL.
+
+[CRITICAL] file:line
+TIME TRAVEL: What future data is being used?
+DECISION POINT: When is the decision made?
+DATA AVAILABLE: What data would actually be available then?

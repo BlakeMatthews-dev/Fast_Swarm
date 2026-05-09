@@ -6,7 +6,6 @@ All traits are float 0.0-1.0, with specific formulas for derived parameters.
 """
 
 import pytest
-
 from Fast_Swarm.Agents.Services.agent_service import (
     calculate_derived_traits,
     calculate_max_hold_duration_ms,

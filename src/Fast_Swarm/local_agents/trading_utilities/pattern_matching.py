@@ -32,25 +32,48 @@ SCRIPT_DIR = Path(__file__).parent.parent.parent / "local-utilities"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-# Import trait calculations
-from backtesting.trait_calculations import (
-    calculate_entry_confirmation_bars,
-    calculate_exit_delay_bars,
-    calculate_hold_limit_periods,
-    calculate_position_size_usd,
-    calculate_stop_loss,
-    calculate_take_profit,
-)
-from metrics import (
-    INDICATOR_COLS,
-    TradingCosts,
-    apply_entry_costs,
-    apply_exit_costs,
-    calculate_trade_costs,
-    get_trading_costs,
-    matches_all_conditions,
-    matches_condition,
-)
+# Import trait calculations (legacy Coinswarm-1 paths — guard for new repo layout)
+try:
+    from backtesting.trait_calculations import (
+        calculate_entry_confirmation_bars,
+        calculate_exit_delay_bars,
+        calculate_hold_limit_periods,
+        calculate_position_size_usd,
+        calculate_stop_loss,
+        calculate_take_profit,
+    )
+except (ImportError, ModuleNotFoundError):
+    # Stubs — these are only used by legacy paper trading paths
+    calculate_entry_confirmation_bars = lambda *a, **kw: 1
+    calculate_exit_delay_bars = lambda *a, **kw: 0
+    calculate_hold_limit_periods = lambda *a, **kw: 168
+    calculate_position_size_usd = lambda *a, **kw: 1000.0
+    calculate_stop_loss = lambda *a, **kw: -5.0
+    calculate_take_profit = lambda *a, **kw: 10.0
+
+try:
+    from metrics import (
+        INDICATOR_COLS,
+        TradingCosts,
+        apply_entry_costs,
+        apply_exit_costs,
+        calculate_trade_costs,
+        get_trading_costs,
+        matches_all_conditions,
+        matches_condition,
+    )
+except (ImportError, ModuleNotFoundError):
+    INDICATOR_COLS = []
+
+    class TradingCosts:
+        """Stub for missing metrics module."""
+        pass
+    apply_entry_costs = lambda *a, **kw: 0
+    apply_exit_costs = lambda *a, **kw: 0
+    calculate_trade_costs = lambda *a, **kw: 0
+    get_trading_costs = lambda *a, **kw: None
+    matches_all_conditions = lambda *a, **kw: False
+    matches_condition = lambda *a, **kw: False
 
 # Import core trade for compatibility
 try:

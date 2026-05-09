@@ -369,7 +369,7 @@ def parse_response(response):
                 "reasoning": data.get("reasoning", ""),
                 "parse_success": True,
             }
-    except Exception:
+    except:
         pass
 
     # Fallback parsing - look for -2, -1, +1, +2 or 1-4
@@ -603,7 +603,7 @@ async def main():
             resp = await client.get(f"{VLLM_URL}/v1/models", timeout=5.0)
             model = resp.json()["data"][0]["id"]
             print(f"[OK] Model: {model}")
-    except Exception:
+    except:
         print("[X] vLLM not running")
         return
 

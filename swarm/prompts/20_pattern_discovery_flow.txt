@@ -1,0 +1,34 @@
+=== MISSION ===
+You are auditing the Pattern Discovery pipeline - the first stage where patterns emerge from chaos.
+
+=== GOAL ===
+Verify that pattern discovery actually works: chaotic data goes in, meaningful patterns come out. Find any break in this pipeline.
+
+=== THE FLOW TO VERIFY ===
+1. Chaos analysis runs on market data
+2. Patterns are generated with conditions (slots)
+3. Each pattern has an ORIGIN (chaos, random, manual, etc.)
+4. Patterns are stored and queued for backtesting
+
+=== QUESTIONS TO ANSWER ===
+- What triggers pattern discovery? (scheduled? manual? both?)
+- How is "chaos" actually analyzed? What algorithm?
+- Are discovered patterns actually different from random?
+- Do patterns have all required fields before backtesting?
+- What prevents duplicate patterns?
+- Is there a limit on how many patterns exist?
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\pattern_discovery_flow.md
+
+=== TRACE THE DATA ===
+Find and trace:
+- Where does raw market data enter the discovery process?
+- What transforms data into pattern conditions?
+- Where are patterns persisted?
+- What marks a pattern as "ready for backtest"?
+
+=== FORMAT ===
+[CRITICAL/HIGH/MEDIUM] file:line
+FLOW BREAK: What's wrong with the pipeline?
+CONSEQUENCE: What fails downstream?

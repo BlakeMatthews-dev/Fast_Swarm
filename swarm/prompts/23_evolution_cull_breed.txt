@@ -1,0 +1,40 @@
+=== MISSION ===
+You are auditing the evolution cycle - the core of natural selection for trading agents.
+
+=== GOAL ===
+Verify that evolution actually produces better agents over time: weak die, strong reproduce, offspring inherit+mutate.
+
+=== THE FLOW TO VERIFY ===
+1. Agents have fitness scores from backtesting
+2. Agents are RANKED by fitness
+3. Bottom X% are CULLED (deleted)
+4. Top X% CLONE (exact copy)
+5. Top agents BREED (crossover traits, inherit patterns)
+6. Offspring have MUTATED traits
+7. Generation counter increments
+
+=== QUESTIONS TO ANSWER ===
+- Is ranking actually by fitness (not random, not inverted)?
+- What % is culled? What % breeds?
+- Does breeding use fitness-weighted parent selection?
+- Do offspring inherit patterns from parents?
+- Is trait crossover implemented correctly?
+- Is mutation bounded to [0,1]?
+- Can evolution stagnate (no diversity)?
+- Is there elitism (best always survives)?
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\evolution_cull_breed.md
+
+=== EVOLUTIONARY PRESSURE CHECK ===
+If evolution works, over 100 generations:
+- Average fitness should INCREASE
+- Bad patterns should DISAPPEAR
+- Good patterns should SPREAD
+
+Is this actually happening?
+
+=== FORMAT ===
+[CRITICAL/HIGH/MEDIUM] file:line
+EVOLUTION FAILURE: What breaks selection pressure?
+CONSEQUENCE: No improvement? Wrong agents survive?

@@ -1256,15 +1256,50 @@ def calculate_pattern_fitness_from_backtest(
     )
 
 
-# NOTE: The following functions are NOT aliased because they have originals
-# with different signatures earlier in this file:
-# - should_promote, should_demote, should_cull (lines ~574-597)
-# - is_assignable_to_agent (line ~948)
-# - mutate_condition, mutate_conditions, mutate_pattern, crossover_patterns (~652-750)
-# - apply_selection_pressure (line ~805)
-#
-# Use the *_dict versions (e.g., should_promote_dict) if you need
-# functions that operate on pattern dicts directly.
+# Aliases for test compatibility
+def should_promote(pattern: dict[str, Any]) -> int | None:
+    """Alias for should_promote_dict."""
+    return should_promote_dict(pattern)
+
+
+def should_demote(pattern: dict[str, Any]) -> int | None:
+    """Alias for should_demote_dict."""
+    return should_demote_dict(pattern)
+
+
+def should_cull(pattern: dict[str, Any]) -> bool:
+    """Alias for should_cull_dict."""
+    return should_cull_dict(pattern)
+
+
+def is_assignable_to_agent(pattern: dict[str, Any]) -> bool:
+    """Alias for is_assignable_to_agent_dict."""
+    return is_assignable_to_agent_dict(pattern)
+
+
+def mutate_condition(condition: dict[str, Any], mutation_rate: float = MUTATION_RATE) -> dict[str, Any]:
+    """Alias for mutate_condition_dict."""
+    return mutate_condition_dict(condition, mutation_rate)
+
+
+def mutate_conditions(conditions: list[dict[str, Any]], mutation_rate: float = MUTATION_RATE) -> list[dict[str, Any]]:
+    """Alias for mutate_conditions_dict."""
+    return mutate_conditions_dict(conditions, mutation_rate)
+
+
+def mutate_pattern(pattern: dict[str, Any], mutation_rate: float = MUTATION_RATE) -> dict[str, Any]:
+    """Alias for mutate_pattern_dict."""
+    return mutate_pattern_dict(pattern, mutation_rate)
+
+
+def crossover_patterns(parent_a: dict[str, Any], parent_b: dict[str, Any]) -> dict[str, Any]:
+    """Alias for crossover_patterns_dict."""
+    return crossover_patterns_dict(parent_a, parent_b)
+
+
+def apply_selection_pressure(patterns: list[dict[str, Any]]) -> dict[str, Any]:
+    """Alias for apply_selection_pressure_dict."""
+    return apply_selection_pressure_dict(patterns)
 
 
 # =============================================================================
@@ -1354,7 +1389,7 @@ async def get_weakest_regime_categories(
     return categories
 
 
-def calculate_pattern_fitness_flexible(
+def calculate_pattern_fitness(
     backtest_or_roi=None,
     sharpe_ratio=None,
     win_rate=None,
@@ -1367,9 +1402,9 @@ def calculate_pattern_fitness_flexible(
     Calculate pattern fitness - overloaded to accept dict or individual args.
 
     Can be called as:
-    - calculate_pattern_fitness_flexible(backtest_dict)
-    - calculate_pattern_fitness_flexible(roi_pct=10, sharpe_ratio=1, ...)
-    - calculate_pattern_fitness_flexible(10, 1, 0.5, 100)  # positional
+    - calculate_pattern_fitness(backtest_dict)
+    - calculate_pattern_fitness(roi_pct=10, sharpe_ratio=1, ...)
+    - calculate_pattern_fitness(10, 1, 0.5, 100)  # positional
     """
     # Handle dict input
     if isinstance(backtest_or_roi, dict):

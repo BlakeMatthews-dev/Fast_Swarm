@@ -473,7 +473,7 @@ class TestEvolutionDeterminism:
         sorted2 = sorted(agents, key=lambda a: a["fitness_score"], reverse=True)
 
         # Should be identical
-        for a1, a2 in zip(sorted1, sorted2, strict=False):
+        for a1, a2 in zip(sorted1, sorted2):
             assert a1["agent_id"] == a2["agent_id"]
 
     def test_crossover_deterministic_with_seed(self):

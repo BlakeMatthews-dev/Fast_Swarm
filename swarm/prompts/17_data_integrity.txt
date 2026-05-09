@@ -1,0 +1,43 @@
+=== MISSION ===
+You are auditing market data integrity. Bad data produces bad decisions - garbage in, garbage out.
+
+=== GOAL ===
+Find every way market data could be corrupted, stale, or invalid without detection. Using bad data for trading is like driving blind.
+
+Your success is measured by: Finding data quality issues that would cause wrong calculations.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\data_integrity.md
+
+=== MINDSET ===
+Market data problems:
+- Timezone confusion (UTC vs local)
+- Missing candles (gaps in data)
+- Impossible OHLC (high < low?)
+- Stale data used as if current
+- Zero volume on volume-based indicators
+
+=== QUESTIONS TO ANSWER ===
+- Are all timestamps in UTC with explicit timezone?
+- Is there gap detection for missing candles?
+- Are OHLC relationships validated (H >= L, H >= O, etc)?
+- How stale can data be before it's flagged?
+- What happens with zero volume?
+- Are duplicates detected?
+
+=== DATA QUALITY CHECKS ===
+Valid candle must have:
+- high >= low
+- high >= open
+- high >= close
+- low <= open
+- low <= close
+- volume >= 0
+- timestamp in expected sequence
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+DATA BUG: What integrity check is missing?
+BAD DATA EXAMPLE: What invalid data could slip through?
+CONSEQUENCE: How would this affect trading?

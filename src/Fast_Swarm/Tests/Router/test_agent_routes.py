@@ -15,13 +15,13 @@ from typing import Any
 
 import pytest
 
-from Agents.Services.agent_service import (
+from Fast_Swarm.Agents.Services.agent_service import (
     calculate_position_size,
     calculate_stop_loss,
     calculate_take_profit,
     get_trading_parameters,
 )
-from Agents.Services.trait_service import ALL_22_TRAITS, generate_all_traits
+from Fast_Swarm.Agents.Services.trait_service import ALL_22_TRAITS, generate_all_traits
 
 # =============================================================================
 # Test Fixtures

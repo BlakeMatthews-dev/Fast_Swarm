@@ -43,6 +43,21 @@ from Fast_Swarm.local_agents.core.traits import (
 )
 from Fast_Swarm.local_agents.shared.llm_client import AIZoneHandler, AIZoneMode
 
+# Bear protection import - supreme risk layer
+try:
+    from Fast_Swarm.Infrastructure.Services.bear_protection_service import (
+        BearProtectionService,
+        MarketState,
+        Regime,
+        get_bear_protection,
+    )
+    BEAR_PROTECTION_AVAILABLE = True
+except ImportError:
+    BEAR_PROTECTION_AVAILABLE = False
+    BearProtectionService = None
+    MarketState = None
+    Regime = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -250,6 +265,8 @@ class AgentExecutor:
         db: AgentDatabase | None = None,
         ai_mode: AIZoneMode = AIZoneMode.UNIFIED,
         ai_zone_handler: AIZoneHandler | None = None,
+        bear_protection: "BearProtectionService | None" = None,
+        use_bear_protection: bool = True,
     ):
         """
         Initialize agent executor.
@@ -260,6 +277,8 @@ class AgentExecutor:
             db: Optional database for persistence.
             ai_mode: How to handle AI zone decisions (SKIP, HEURISTIC, LLM, UNIFIED).
             ai_zone_handler: Optional pre-configured AIZoneHandler.
+            bear_protection: Optional BearProtectionService instance (uses singleton if None).
+            use_bear_protection: Whether to enable bear protection (default True).
         """
         self.agent = agent_record
         self.patterns = patterns
@@ -275,6 +294,14 @@ class AgentExecutor:
             self.ai_zone_handler = ai_zone_handler
         else:
             self.ai_zone_handler = AIZoneHandler(mode=ai_mode)
+
+        # Bear Protection Layer - supreme veto power over position sizing
+        self.use_bear_protection = use_bear_protection and BEAR_PROTECTION_AVAILABLE
+        if self.use_bear_protection:
+            self.bear_protection = bear_protection or get_bear_protection()
+        else:
+            self.bear_protection = None
+        self._last_regime: "Regime | None" = None
 
         # Trading parameters from traits
         self.position_size = calculate_position_size(self.traits.risk_tolerance)
@@ -298,7 +325,94 @@ class AgentExecutor:
         self._current_candle: dict | None = None
         self._current_indicators: dict[str, float] | None = None
 
-        logger.info(f"[AgentExecutor] Initialized {agent_record.agent_name} with {len(patterns)} patterns")
+        bp_status = "enabled" if self.use_bear_protection else "disabled"
+        logger.info(f"[AgentExecutor] Initialized {agent_record.agent_name} with {len(patterns)} patterns (bear_protection={bp_status})")
+
+    # =========================================================================
+    # Bear Protection
+    # =========================================================================
+
+    def _build_market_state(
+        self,
+        timestamp: int,
+        asset: str,
+        indicators: dict[str, float],
+    ) -> "MarketState | None":
+        """
+        Build MarketState from current indicators for bear protection evaluation.
+
+        The bear protection service expects motion derivative z-scores from
+        multiple timeframes. These should be present in the indicators dict
+        with prefixes like 'tf_1h_', 'tf_4h_', 'tf_1d_'.
+
+        Returns None if bear protection is disabled or MarketState unavailable.
+        """
+        if not self.use_bear_protection or MarketState is None:
+            return None
+
+        from datetime import datetime, timezone
+
+        # Convert timestamp to datetime
+        dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+
+        return MarketState(
+            time=dt,
+            symbol=asset,
+            # 1h timeframe derivatives
+            tf_1h_vel=indicators.get("tf_1h_close_velocity_zscore"),
+            tf_1h_acc=indicators.get("tf_1h_close_acceleration_zscore"),
+            tf_1h_adx_jerk=indicators.get("tf_1h_adx_14_jerk_zscore"),
+            # 4h timeframe derivatives
+            tf_4h_vel=indicators.get("tf_4h_close_velocity_zscore"),
+            tf_4h_acc=indicators.get("tf_4h_close_acceleration_zscore"),
+            tf_4h_adx_jerk=indicators.get("tf_4h_adx_14_jerk_zscore"),
+            # 1d timeframe derivatives
+            tf_1d_vel=indicators.get("tf_1d_close_velocity_zscore"),
+            tf_1d_acc=indicators.get("tf_1d_close_acceleration_zscore"),
+            tf_1d_adx_jerk=indicators.get("tf_1d_adx_14_jerk_zscore"),
+        )
+
+    def _get_regime_position_limit(
+        self,
+        timestamp: int,
+        asset: str,
+        indicators: dict[str, float],
+    ) -> tuple[float, "Regime | None"]:
+        """
+        Get maximum position size allowed by current regime.
+
+        Returns:
+            (max_position_multiplier, current_regime) or (1.0, None) if disabled.
+        """
+        if not self.use_bear_protection or not self.bear_protection:
+            return (1.0, None)
+
+        market_state = self._build_market_state(timestamp, asset, indicators)
+        if not market_state:
+            return (1.0, None)
+
+        regime_state = self.bear_protection.evaluate(market_state)
+        return (regime_state.max_position, regime_state.regime)
+
+    def _check_force_exit(
+        self,
+        timestamp: int,
+        asset: str,
+        indicators: dict[str, float],
+    ) -> bool:
+        """
+        Check if bear protection requires force exit of positions.
+
+        This is the VETO POWER - when True, positions should be closed immediately.
+        """
+        if not self.use_bear_protection or not self.bear_protection:
+            return False
+
+        market_state = self._build_market_state(timestamp, asset, indicators)
+        if not market_state:
+            return False
+
+        return self.bear_protection.should_force_exit(market_state)
 
     # =========================================================================
     # Pattern Matching
@@ -485,8 +599,16 @@ class AgentExecutor:
         timestamp: int,
         confidence: float,
         decision: TradeDecisionResult,
+        indicators: dict[str, float] | None = None,
     ) -> Position:
-        """Open a new position."""
+        """
+        Open a new position with bear protection regime limits.
+
+        The position size is capped by the current regime:
+        - DEFENSIVE: 25% max
+        - NEUTRAL: 50% max
+        - AGGRESSIVE: 75% max
+        """
         pattern = self.patterns.get(pattern_id, {})
         direction = pattern.get("direction", "long")
 
@@ -501,6 +623,19 @@ class AgentExecutor:
         # Get exit conditions from pattern (indicator-based exits)
         exit_conditions = pattern.get("exit_conditions", {})
 
+        # Apply bear protection regime position limit
+        base_position_size = self.position_size
+        regime_info = ""
+        if indicators:
+            max_position, regime = self._get_regime_position_limit(timestamp, asset, indicators)
+            # Cap position size at regime limit
+            adjusted_position_size = min(base_position_size, max_position)
+            if regime:
+                regime_info = f" [regime={regime.value}, max={max_position*100:.0f}%]"
+                self._last_regime = regime
+        else:
+            adjusted_position_size = base_position_size
+
         position = Position(
             pattern_id=pattern_id,
             asset=asset,
@@ -510,7 +645,7 @@ class AgentExecutor:
             entry_confidence=confidence,
             decision_zone=decision.zone,
             ai_consulted=decision.ai_consulted,
-            position_size_pct=self.position_size * 100,
+            position_size_pct=adjusted_position_size * 100,
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
             exit_conditions=exit_conditions,  # Pattern-specific exit rules
@@ -519,7 +654,7 @@ class AgentExecutor:
         self.current_position = position
         self.state = AgentState.IN_POSITION
 
-        logger.debug(f"[AgentExecutor] {self.agent.agent_name} opened {direction} @ {current_price}")
+        logger.debug(f"[AgentExecutor] {self.agent.agent_name} opened {direction} @ {current_price} size={adjusted_position_size*100:.0f}%{regime_info}")
         return position
 
     def _close_position(
@@ -833,9 +968,13 @@ class AgentExecutor:
         This is the main entry point for the agent's trading loop.
         Call this for each new candle in the data stream.
 
+        Bear Protection Integration:
+        - When in position: checks for VETO EXIT (force close if DEFENSIVE signal fires)
+        - When entering: caps position size based on current regime
+
         Args:
             candle: OHLCV candle dict with 'open', 'high', 'low', 'close', 'volume', 'timestamp'.
-            indicators: Pre-computed indicator values dict.
+            indicators: Pre-computed indicator values dict (should include tf_1h/4h/1d derivatives).
             asset: Asset symbol.
 
         Returns:
@@ -852,6 +991,15 @@ class AgentExecutor:
 
         # If in position, check exit conditions
         if self.state == AgentState.IN_POSITION and self.current_position:
+            # BEAR PROTECTION VETO: Force exit if entering DEFENSIVE regime
+            if self._check_force_exit(timestamp, asset, indicators):
+                logger.warning(
+                    f"[AgentExecutor] {self.agent.agent_name} BEAR PROTECTION VETO - "
+                    f"Force closing position @ {current_price}"
+                )
+                return self._close_position(current_price, timestamp, "bear_protection_veto")
+
+            # Normal exit condition checks
             exit_check = self._check_exit_conditions(current_price, timestamp, indicators)
             if exit_check:
                 should_exit, reason = exit_check
@@ -860,6 +1008,14 @@ class AgentExecutor:
 
         # If idle, look for entry signals
         if self.state == AgentState.IDLE:
+            # Check regime before even evaluating patterns
+            if self.use_bear_protection:
+                max_position, regime = self._get_regime_position_limit(timestamp, asset, indicators)
+                # In DEFENSIVE mode with very low position limit, skip entries
+                if regime and regime.value == "DEFENSIVE" and max_position <= 0.25:
+                    # Still allow entry but with reduced size (handled in _open_position)
+                    pass
+
             # Evaluate all patterns
             matches = self._evaluate_patterns(indicators)
 
@@ -885,6 +1041,7 @@ class AgentExecutor:
                             timestamp=timestamp,
                             confidence=match_result.confidence,
                             decision=decision,
+                            indicators=indicators,  # Pass indicators for regime check
                         )
 
         return None

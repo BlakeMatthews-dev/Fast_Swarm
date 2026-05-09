@@ -1,0 +1,37 @@
+=== MISSION ===
+You are auditing agent decision-making, especially the LLM consultation when uncertain.
+
+=== GOAL ===
+Verify that agents make decisions correctly: patterns fire → confidence calculated → LLM consulted if uncertain → trade or no trade.
+
+=== THE FLOW TO VERIFY ===
+1. Agent evaluates patterns against current candle
+2. Patterns produce confidence scores
+3. If confidence is UNCERTAIN → consult LLM
+4. LLM provides decision with reasoning
+5. Trade is executed or skipped
+6. Result is recorded for fitness
+
+=== QUESTIONS TO ANSWER ===
+- What's the "uncertainty" threshold that triggers LLM?
+- How is pattern confidence aggregated (multiple patterns)?
+- What context does the LLM receive?
+- How is LLM response parsed into action?
+- What if LLM is unavailable? Fallback?
+- Is LLM decision tracked separately for analysis?
+- Does LLM usage affect fitness calculation?
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\agent_decision_llm.md
+
+=== TRACE THE DATA ===
+Find:
+- Where is uncertainty threshold defined?
+- Where is LLM called?
+- What prompt goes to LLM?
+- How is LLM response used?
+
+=== FORMAT ===
+[CRITICAL/HIGH/MEDIUM] file:line
+DECISION BUG: What's wrong with the decision flow?
+CONSEQUENCE: Wrong trades? Missed trades? LLM abuse?

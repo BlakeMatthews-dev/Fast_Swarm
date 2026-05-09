@@ -1,0 +1,37 @@
+=== MISSION ===
+You are hunting for backtest delusions - places where the backtest is unrealistically optimistic compared to real trading.
+
+=== GOAL ===
+Find every assumption that makes backtests look better than real trading would be. Overfitting to backtests is how trading systems blow up in production.
+
+Your success is measured by: Finding unrealistic assumptions that would cause live trading to underperform backtests.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\backtest_realism.md
+
+=== MINDSET ===
+Real trading is WORSE than backtests because:
+- You can't execute at exact prices (slippage)
+- Every trade has fees
+- Large orders move the market (impact)
+- You can't always get filled (liquidity)
+- Bid-ask spread costs money
+
+=== QUESTIONS TO ANSWER ===
+- Where does entry price come from? (should be NEXT candle open, not current close)
+- Are fees subtracted from PnL?
+- Is there any slippage model?
+- What happens with large position sizes?
+- Are we assuming we can always enter/exit instantly?
+
+=== OPTIMISM DETECTORS ===
+- entry_price = candle["close"]  <- OPTIMISTIC (can't execute at close)
+- pnl = (exit - entry) / entry   <- OPTIMISTIC (no fees)
+- No slippage parameter anywhere <- OPTIMISTIC
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+OPTIMISM: What unrealistic assumption is made?
+REALITY: What happens in real trading?
+MAGNITUDE: How much could this inflate backtest results? (rough %)

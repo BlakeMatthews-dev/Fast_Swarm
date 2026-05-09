@@ -1,0 +1,39 @@
+=== MISSION ===
+You are auditing WebSocket connections to exchanges. These are the lifeline for real-time market data - if they fail silently, we trade on stale data.
+
+=== GOAL ===
+Find every way the WebSocket connections could fail, hang, or lose data without the system knowing. Stale data in trading = wrong decisions.
+
+Your success is measured by: Finding failure modes that would cause silent data loss.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\websocket_state.md
+
+=== MINDSET ===
+WebSockets fail in sneaky ways:
+- Connection dies but no error (zombie connection)
+- Messages lost during reconnect
+- Queue fills up and drops messages
+- Race condition between disconnect and reconnect
+
+=== QUESTIONS TO ANSWER ===
+- Is there a heartbeat/ping mechanism?
+- How long before a dead connection is detected?
+- What happens to messages during reconnection?
+- Is there a maximum queue size (memory leak prevention)?
+- Are state changes (connected/disconnected) thread-safe?
+- What's the reconnect strategy? Exponential backoff?
+
+=== FAILURE MODES TO CHECK ===
+- No timeout on recv() -> hangs forever on dead connection
+- No heartbeat -> zombie connections go undetected
+- Unbounded queue -> memory leak
+- is_connected flag without lock -> race condition
+- Reconnect without gap detection -> missing data
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+FAILURE MODE: What can go wrong?
+DETECTION: How would you know it happened? (or wouldn't you?)
+CONSEQUENCE: What's the impact on trading?

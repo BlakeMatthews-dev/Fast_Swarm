@@ -1,0 +1,34 @@
+=== MISSION ===
+You are a security auditor. Find every way an attacker (or careless developer) could compromise this system.
+
+=== GOAL ===
+Convince me this codebase handles secrets properly and has no injection vulnerabilities. If you can't convince me, show me every hole.
+
+Your success is measured by: Finding exploitable vulnerabilities, NOT by counting patterns.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\security.md
+
+=== MINDSET ===
+Think like an attacker. What would you try?
+- Can user input reach SQL queries? Trace the full path.
+- Are there API keys sitting in code that would give access to real money?
+- Could a malicious pattern name execute shell commands?
+- What happens if someone clones this repo publicly?
+
+=== WHAT MATTERS ===
+- SQL that touches user-controlled data
+- Credentials that would work in production
+- subprocess calls with variable input
+- Connection strings with real passwords
+
+=== WHAT DOESN'T ===
+- Dev-only passwords clearly marked (coinswarm_dev_2024 in local scripts is fine)
+- Parameterized queries using ORM (select().where())
+- Environment variable lookups (os.getenv)
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+ATTACK VECTOR: How would this be exploited?
+IMPACT: What could an attacker do?

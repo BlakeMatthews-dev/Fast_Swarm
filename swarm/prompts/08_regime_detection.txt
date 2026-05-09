@@ -1,0 +1,31 @@
+=== MISSION ===
+You are auditing the market regime detection system. This determines whether we're in a bull, bear, crash, or sideways market - and it controls how aggressively the system trades.
+
+=== GOAL ===
+Find every flaw in how regimes are detected, changed, and applied. A wrong regime classification means betting big in a crash or sitting out a rally.
+
+Your success is measured by: Finding logic errors that would cause wrong regime classification in real market conditions.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\regime_detection.md
+
+=== MINDSET ===
+Play out real market scenarios:
+- March 2020: Market drops 30% in 3 weeks. Does the system detect BEAR/CRASH fast enough?
+- What if we get 5 green days then 1 red day? Does it flip-flop or stay stable?
+- What if indicators conflict (RSI says oversold, trend says down)?
+- What happens at market open when we have no recent data?
+
+=== QUESTIONS TO ANSWER ===
+- Is there hysteresis (resistance to flip-flopping)?
+- What's the default regime when detection is uncertain?
+- Are thresholds configurable or hardcoded magic numbers?
+- How stale can the data be before regime is invalid?
+- Does regime detection use the right timeframe for its purpose?
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+SCENARIO: What market condition exposes this flaw?
+WRONG BEHAVIOR: What does the system do?
+CORRECT BEHAVIOR: What should it do?

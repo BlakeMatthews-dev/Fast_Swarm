@@ -15,7 +15,7 @@ import random
 
 import pytest
 
-from Agents.Services.agent_service import (
+from Fast_Swarm.Agents.Services.agent_service import (
     calculate_derived_traits,
     calculate_max_hold_duration_ms,
     calculate_position_size,
@@ -23,7 +23,7 @@ from Agents.Services.agent_service import (
     calculate_take_profit,
     get_trading_parameters,
 )
-from Agents.Services.trait_service import (
+from Fast_Swarm.Agents.Services.trait_service import (
     ADDITIONAL_TRAITS,
     ALL_22_TRAITS,
     BASE_TRAITS,

@@ -111,13 +111,16 @@ async def spawn_agents(count: int):
     ollama_available = await check_ollama_available()
     if not ollama_available:
         raise ValueError(
-            "Ollama LLM is REQUIRED for agent spawning but is not available. Start Ollama with: ollama serve"
+            "LLM is REQUIRED for agent spawning but is not available. Check Conductor (port 8100) or Ollama (port 11434)."
         )
 
     use_llm = True  # AI is always required
 
     # Get all active patterns via async SQLModel
+    # First try with quality filters, then fall back to untested patterns for bootstrap
     all_patterns = await db.get_active_patterns()
+    if not all_patterns:
+        all_patterns = await db.get_active_patterns(min_trades=0, min_fitness=0.0)
 
     if not all_patterns:
         raise ValueError("No active patterns in PostgreSQL. Create or import patterns first.")
@@ -273,7 +276,7 @@ async def spawn_exit_strategy_comparison():
 
     ollama_available = await check_ollama_available()
     if not ollama_available:
-        raise ValueError("Ollama LLM is REQUIRED")
+        raise ValueError("LLM is REQUIRED (check Conductor or Ollama)")
 
     all_patterns = await db.get_active_patterns()
     if not all_patterns:

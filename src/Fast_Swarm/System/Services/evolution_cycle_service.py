@@ -100,16 +100,16 @@ class EvolutionCycleService:
         cache_stats = self.state_cache.get_cache_stats()
         results["cache_stats"] = cache_stats
 
-        # Phase 0.5: Pattern Batch Backtest (priority queue testing)
-        print("[EvolutionCycle] Phase 0.5: Pattern batch backtest...")
+        # Phase 0.5: Quick pattern batch test (small batch — full testing done by separate loop)
+        print("[EvolutionCycle] Phase 0.5: Quick pattern batch test (10 patterns)...")
         try:
             discovery_result = await self.pattern_discovery.run_batch_backtest(
                 session=session,
-                batch_size=50,
+                batch_size=10,
             )
         except Exception as e:
             print(f"[EvolutionCycle] Pattern backtest skipped: {e}")
-            # CRITICAL: Rollback the failed transaction so subsequent queries can proceed
+            # TODO: Remove rollback once pattern discovery uses compute-then-write
             await session.rollback()
             discovery_result = {"skipped": True, "reason": str(e)}
         results["phases"]["pattern_discovery"] = discovery_result
@@ -135,10 +135,10 @@ class EvolutionCycleService:
             print("[EvolutionCycle] Triggering emergency spawn...")
             # Emergency spawn to recover from extinction
             try:
-                emergency_spawned = await self.agent_spawn.spawn_agents_batch(
+                emergency_spawned = await self.agent_spawn.spawn_new_agents(
                     session=session,
                     count=target_agent_population,
-                    strategy="genesis",
+                    generation=1,
                 )
                 print(f"[EvolutionCycle] Emergency spawned {len(emergency_spawned)} agents")
                 agent_ids = emergency_spawned
@@ -153,17 +153,68 @@ class EvolutionCycleService:
                 results["phases"]["backtest"] = {"error": "population_extinct", "agents_tested": 0}
                 return results
 
-        backtest_results = await self.agent_backtest.backtest_agents(
-            session=session,
-            agent_ids=agent_ids,
-            assets=backtest_assets,
-        )
+        try:
+            backtest_results = await self.agent_backtest.backtest_agents(
+                session=session,
+                agent_ids=agent_ids,
+                assets=backtest_assets,
+            )
+            results["phases"]["backtest"] = {
+                "agents_tested": len(agent_ids),
+                "successful": sum(1 for r in backtest_results.values() if "error" not in r),
+                "failed": sum(1 for r in backtest_results.values() if "error" in r),
+            }
+        except Exception as bt_err:
+            print(f"[EvolutionCycle] Backtest phase failed: {bt_err}")
+            await session.rollback()
+            backtest_results = {}
+            results["phases"]["backtest"] = {"error": str(bt_err), "agents_tested": 0}
 
-        results["phases"]["backtest"] = {
-            "agents_tested": len(agent_ids),
-            "successful": sum(1 for r in backtest_results.values() if "error" not in r),
-            "failed": sum(1 for r in backtest_results.values() if "error" in r),
-        }
+        # Phase 1b: Out-of-Sample validation (last 6 months, all timeframes)
+        # This is the key overfitting filter — agents must generalize to recent unseen data
+        print("[EvolutionCycle] Phase 1b: Out-of-sample validation (recent 6 months, all TFs)...")
+        try:
+            from datetime import timedelta
+
+            oos_days = 180
+            oos_cutoff_ts = int((datetime.utcnow() - timedelta(days=oos_days)).timestamp() * 1000)
+            all_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+            oos_results = await self.agent_backtest.backtest_agents(
+                session=session,
+                agent_ids=agent_ids,
+                assets=backtest_assets,
+                min_start_ts=oos_cutoff_ts,
+                timeframes_override=all_timeframes,
+            )
+
+            # Store OOS fitness — batch load all agents in one query
+            valid_oos = {aid: r for aid, r in oos_results.items() if "error" not in r}
+            oos_scored = 0
+            if valid_oos:
+                agent_result = await session.execute(
+                    select(Agent).where(Agent.agent_id.in_(list(valid_oos.keys())))
+                )
+                agents_by_id = {a.agent_id: a for a in agent_result.scalars().all()}
+                for aid, oos_result in valid_oos.items():
+                    agent_obj = agents_by_id.get(aid)
+                    if agent_obj:
+                        traits = agent_obj.traits or {}
+                        traits["oos_fitness_score"] = float(oos_result.get("fitness_score", 0))
+                        agent_obj.traits = traits
+                        oos_scored += 1
+
+            await session.commit()
+            results["phases"]["oos_validation"] = {
+                "oos_days": oos_days,
+                "agents_scored": oos_scored,
+                "timeframes": all_timeframes,
+            }
+            print(f"[EvolutionCycle] OOS: {oos_scored} agents scored on recent {oos_days}-day data across {len(all_timeframes)} timeframes")
+        except Exception as oos_err:
+            print(f"[EvolutionCycle] OOS validation failed (non-fatal): {oos_err}")
+            await session.rollback()
+            results["phases"]["oos_validation"] = {"error": str(oos_err)}
 
         # Phase 2: Rank agents
         print("[EvolutionCycle] Phase 2: Ranking agents...")
@@ -173,6 +224,28 @@ class EvolutionCycleService:
             "total_agents": len(rankings),
             "top_fitness": float(rankings[0]["fitness_score"]) if rankings else 0,
             "avg_fitness": sum(float(r["fitness_score"] or 0) for r in rankings) / len(rankings) if rankings else 0,
+        }
+
+        # Phase 2.5: Level increment for top 10 agents (+2 levels each)
+        # This rewards consistently high performers regardless of reproduction
+        print("[EvolutionCycle] Phase 2.5: Incrementing levels for top 10 agents...")
+        all_agents_for_leveling = await self.agent_ranking.get_all_agents_ranked(session=session)
+        top_10_agents = all_agents_for_leveling[:10]
+        leveled_agents = []
+
+        for agent in top_10_agents:
+            old_level = agent.level or 1
+            agent.level = old_level + 2
+            leveled_agents.append({"agent_id": agent.agent_id, "old_level": old_level, "new_level": agent.level})
+        # Agents are already tracked by session from the query — no add() needed
+
+        await session.commit()
+        print(f"[EvolutionCycle] Leveled up {len(leveled_agents)} agents (+2 each)")
+
+        results["phases"]["level_increment"] = {
+            "agents_leveled": len(leveled_agents),
+            "level_increase": 2,
+            "agents": leveled_agents[:5],  # Sample
         }
 
         # Phase 3: Breeding - Top 10 agents produce 5 crossover children
@@ -335,20 +408,24 @@ class EvolutionCycleService:
 
             print(f"[EvolutionCycle] Spawning {spawn_count} agents with {len(spawn_patterns)} patterns")
 
-            new_agent_ids = await self.agent_spawn.spawn_new_agents(
-                session=session,
-                count=spawn_count,
-                generation=1,
-                available_patterns=spawn_patterns,
-            )
-
-            results["phases"]["spawn"] = {
-                "agents_spawned": len(new_agent_ids),
-                "pattern_source": "regime_priority" if regime_patterns else "quintile_fallback",
-                "pattern_count": len(spawn_patterns),
-                "formula": f"max({culled_count} - {children_count} - {clones_count}, {target_agent_population} - {current_population})",
-                "new_agent_ids": new_agent_ids[:5],  # Sample
-            }
+            try:
+                new_agent_ids = await self.agent_spawn.spawn_new_agents(
+                    session=session,
+                    count=spawn_count,
+                    generation=1,
+                    available_patterns=spawn_patterns,
+                )
+                results["phases"]["spawn"] = {
+                    "agents_spawned": len(new_agent_ids),
+                    "pattern_source": "regime_priority" if regime_patterns else "quintile_fallback",
+                    "pattern_count": len(spawn_patterns),
+                    "formula": f"max({culled_count} - {children_count} - {clones_count}, {target_agent_population} - {current_population})",
+                    "new_agent_ids": new_agent_ids[:5],  # Sample
+                }
+            except Exception as spawn_err:
+                print(f"[EvolutionCycle] Spawn phase failed: {spawn_err}")
+                await session.rollback()
+                results["phases"]["spawn"] = {"error": str(spawn_err), "agents_spawned": 0}
         else:
             results["phases"]["spawn"] = {
                 "agents_spawned": 0,
@@ -362,6 +439,47 @@ class EvolutionCycleService:
         results["cycle_end"] = cycle_end.isoformat()
         results["duration_seconds"] = (cycle_end - cycle_start).total_seconds()
         results["final_population"] = final_stats
+
+        # Phase 6: Crucible Eligibility Check
+        # Check all agents that leveled up or were created this cycle for Crucible eligibility
+        print("[EvolutionCycle] Phase 6: Checking Crucible eligibility...")
+        from .crucible_entry_service import CrucibleEntryService
+
+        crucible_service = CrucibleEntryService()
+
+        # Check the agents that just leveled up (most likely to be eligible)
+        leveled_agent_ids = [a["agent_id"] for a in leveled_agents]
+        crucible_entries = await crucible_service.check_agents_batch(session, leveled_agent_ids)
+
+        results["phases"]["crucible"] = {
+            "agents_checked": len(leveled_agent_ids),
+            "entries_created": len(crucible_entries),
+            "new_entries": [
+                {"agent_id": e.agent_id, "level": e.level_at_entry}
+                for e in crucible_entries
+            ],
+        }
+
+        if crucible_entries:
+            print(f"[EvolutionCycle] {len(crucible_entries)} agents entered the Crucible!")
+
+            # Phase 6b: Run Crucible tests for new entries
+            print("[EvolutionCycle] Phase 6b: Running Crucible tests...")
+            from .crucible_test_service import CrucibleTestService
+
+            test_service = CrucibleTestService()
+            crucible_results = []
+            for entry in crucible_entries:
+                try:
+                    test_result = await test_service.run_crucible_test(session, entry.id)
+                    crucible_results.append(test_result)
+                except Exception as e:
+                    print(f"[EvolutionCycle] Crucible test failed for entry {entry.id}: {e}")
+
+            results["phases"]["crucible"]["tests_run"] = len(crucible_results)
+            results["phases"]["crucible"]["tests_completed"] = sum(
+                1 for r in crucible_results if r.get("status") == "completed"
+            )
 
         return results
 

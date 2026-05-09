@@ -374,6 +374,10 @@ async def backtest_pattern_on_windows(
                 # Use local_agents engine
                 loader = OHLCVLoader()
                 default_traits = AgentTraits()
+                # Override decision zone for pattern tests: always execute when conditions match
+                # Patterns don't use AI — we're purely testing signal quality
+                default_traits.min_threshold = 0.0
+                default_traits.ai_threshold = 0.0
                 config = BacktestConfig.from_traits(default_traits)
 
                 pattern_dict = {
@@ -414,6 +418,16 @@ async def backtest_pattern_on_windows(
                     },
                 )
 
+                # Persist raw trades to backtest_trades_unified
+                if trades:
+                    try:
+                        from Fast_Swarm.Trades.Services.trade_service import persist_backtest_trades
+                        await persist_backtest_trades(
+                            session, trades, source="pattern_backtest", timeframe=timeframe
+                        )
+                    except Exception as persist_err:
+                        print(f"[Backtest] Trade persist error for {pattern_id}: {persist_err}")
+
                 # Convert to dicts
                 trade_dicts = [{"pnl_pct": t.pnl_pct} for t in trades if hasattr(t, "pnl_pct")]
 
@@ -424,8 +438,10 @@ async def backtest_pattern_on_windows(
                 )
 
             if trade_dicts:
-                # Calculate benchmark for this window
+                # Calculate benchmark for this window (None = no candle data)
                 benchmark = await _get_window_benchmark(session, asset, timeframe, window["start_ts"], window["end_ts"])
+                if benchmark is None:
+                    benchmark = 0.0  # Fallback, but alpha won't be meaningful
 
                 metrics = calculate_metrics_for_trades(
                     trade_dicts,
@@ -444,6 +460,7 @@ async def backtest_pattern_on_windows(
 
         except Exception as e:
             print(f"[Backtest] Window error for {pattern_id}: {e}")
+            # Don't rollback — orchestrator manages the transaction batch
             continue
 
     return results
@@ -487,7 +504,8 @@ async def _get_window_benchmark(
         start_price = float(start_row[0])
         end_price = float(end_row[0])
         return ((end_price - start_price) / start_price) * 100
-    return 0.0
+    # Return None so callers can distinguish "no data" from "flat benchmark"
+    return None
 
 
 async def _simple_backtest(

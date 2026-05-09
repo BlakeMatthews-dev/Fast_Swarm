@@ -34,7 +34,6 @@ from ..Models.crucible_models import CrucibleEntry, Wisdom
 # Import vLLM client (required for wisdom generation)
 try:
     from ...local_agents.shared.vllm_client import VLLMClient, check_vllm_available
-
     HAS_VLLM = True
 except ImportError:
     HAS_VLLM = False
@@ -176,25 +175,25 @@ class WisdomTransferService:
         # Build prompt with agent context
         prompt = f"""## Agent Performance Summary
 
-Agent ID: {context["agent_id"][:8]}
-Level: {context["level"]}
-Overall Fitness: {context["overall_fitness"]:.1f}
+Agent ID: {context['agent_id'][:8]}
+Level: {context['level']}
+Overall Fitness: {context['overall_fitness']:.1f}
 
 ## Regime Performance
-{json.dumps(context["regime_scores"], indent=2)}
+{json.dumps(context['regime_scores'], indent=2)}
 
 ## Trading Philosophy
-{context["philosophy"]}
+{context['philosophy']}
 
 ## Key Traits
-{json.dumps({k: round(v, 2) for k, v in list(context["traits"].items())[:5]}, indent=2)}
+{json.dumps({k: round(v, 2) for k, v in list(context['traits'].items())[:5]}, indent=2)}
 
 ## Assigned Patterns
-{len(context["patterns"])} patterns assigned
+{len(context['patterns'])} patterns assigned
 
 ## Agent's Memories (Top Lessons/Insights)
 """
-        for mem in context["memories"][:5]:
+        for mem in context['memories'][:5]:
             prompt += f"- [{mem['type']}] {mem['content'][:100]}...\n"
 
         prompt += "\nDistill actionable wisdom from this agent's Crucible performance."

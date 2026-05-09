@@ -15,12 +15,12 @@ async def get_pattern_average_stats(session: AsyncSession):
     # Use SQL aggregation for averages (much faster than loading all patterns)
     result = await session.execute(
         select(
-            func.count().label("count"),
-            func.avg(Pattern.fitness_score).label("avg_fitness"),
-            func.avg(Pattern.win_rate).label("avg_win_rate"),
-            func.avg(Pattern.total_trades).label("avg_trades"),
-            func.avg(Pattern.total_roi_pct).label("avg_roi"),
-            func.avg(Pattern.sortino_ratio).label("avg_sortino"),
+            func.count().label('count'),
+            func.avg(Pattern.fitness_score).label('avg_fitness'),
+            func.avg(Pattern.win_rate).label('avg_win_rate'),
+            func.avg(Pattern.total_trades).label('avg_trades'),
+            func.avg(Pattern.total_roi_pct).label('avg_roi'),
+            func.avg(Pattern.sortino_ratio).label('avg_sortino'),
         ).where(Pattern.is_active.is_(True), Pattern.fitness_score.isnot(None))
     )
     row = result.one()
@@ -38,9 +38,13 @@ async def get_pattern_average_stats(session: AsyncSession):
 
     # Count by status using SQL aggregation
     status_result = await session.execute(
-        select(Pattern.status, func.count().label("count"))
-        .where(Pattern.is_active.is_(True), Pattern.fitness_score.isnot(None))
-        .group_by(Pattern.status)
+        select(
+            Pattern.status,
+            func.count().label('count')
+        ).where(
+            Pattern.is_active.is_(True),
+            Pattern.fitness_score.isnot(None)
+        ).group_by(Pattern.status)
     )
     status_counts = {row.status or "unknown": row.count for row in status_result.all()}
 
@@ -52,7 +56,8 @@ async def get_pattern_average_stats(session: AsyncSession):
         .limit(5)
     )
     top_5 = [
-        {"name": r.name, "fitness": round(float(r.fitness_score), 2), "status": r.status} for r in top_result.all()
+        {"name": r.name, "fitness": round(float(r.fitness_score), 2), "status": r.status}
+        for r in top_result.all()
     ]
 
     return {

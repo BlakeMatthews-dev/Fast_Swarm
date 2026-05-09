@@ -32,6 +32,68 @@ from Fast_Swarm.local_agents.shared.confidence import (
 
 INDICATOR_ALIASES = {
     # =========================================================================
+    # Motion Derivatives (from analyze_motion_derivatives.py)
+    # These are 1st-6th order derivatives of price and indicators
+    # Stored in data/derivatives/ partitioned parquet files
+    # =========================================================================
+    # Price derivatives (close)
+    "velocity": "close_velocity_zscore",
+    "acceleration": "close_acceleration_zscore",
+    "jerk": "close_jerk_zscore",
+    "snap": "close_snap_zscore",
+    "crackle": "close_crackle_zscore",
+    "pop": "close_pop_zscore",
+    # Explicit close prefix versions
+    "closeVelocity": "close_velocity_zscore",
+    "closeAcceleration": "close_acceleration_zscore",
+    "closeJerk": "close_jerk_zscore",
+    "closeSnap": "close_snap_zscore",
+    "closeCrackle": "close_crackle_zscore",
+    "closePop": "close_pop_zscore",
+    # Snake_case versions
+    "close_velocity": "close_velocity_zscore",
+    "close_acceleration": "close_acceleration_zscore",
+    "close_jerk": "close_jerk_zscore",
+    "close_snap": "close_snap_zscore",
+    "close_crackle": "close_crackle_zscore",
+    "close_pop": "close_pop_zscore",
+    # Raw (non-normalized) versions
+    "velocityRaw": "close_velocity",
+    "accelerationRaw": "close_acceleration",
+    "jerkRaw": "close_jerk",
+    "snapRaw": "close_snap",
+    "crackleRaw": "close_crackle",
+    "popRaw": "close_pop",
+    # RSI derivatives
+    "rsiVelocity": "rsi_14_velocity_zscore",
+    "rsiAcceleration": "rsi_14_acceleration_zscore",
+    "rsiJerk": "rsi_14_jerk_zscore",
+    "rsi_velocity": "rsi_14_velocity_zscore",
+    "rsi_acceleration": "rsi_14_acceleration_zscore",
+    "rsi_jerk": "rsi_14_jerk_zscore",
+    # MACD derivatives
+    "macdVelocity": "macd_histogram_velocity_zscore",
+    "macdAcceleration": "macd_histogram_acceleration_zscore",
+    "macdJerk": "macd_histogram_jerk_zscore",
+    "macd_velocity": "macd_histogram_velocity_zscore",
+    "macd_acceleration": "macd_histogram_acceleration_zscore",
+    "macd_jerk": "macd_histogram_jerk_zscore",
+    # OBV derivatives (volume momentum)
+    "obvVelocity": "obv_velocity_zscore",
+    "obvAcceleration": "obv_acceleration_zscore",
+    "obv_velocity": "obv_velocity_zscore",
+    "obv_acceleration": "obv_acceleration_zscore",
+    # ATR derivatives (volatility change)
+    "atrVelocity": "atr_14_velocity_zscore",
+    "atrAcceleration": "atr_14_acceleration_zscore",
+    "atr_velocity": "atr_14_velocity_zscore",
+    "atr_acceleration": "atr_14_acceleration_zscore",
+    # Divergence flags (boolean)
+    "accelJerkDiv": "close_accel_jerk_div",
+    "priceRsiDiv": "price_vs_rsi_vel_div",
+    "accel_jerk_divergence": "close_accel_jerk_div",
+    "price_rsi_divergence": "price_vs_rsi_vel_div",
+    # =========================================================================
     # Momentum Indicators
     # =========================================================================
     "rsi14": "rsi_14",
@@ -75,6 +137,17 @@ INDICATOR_ALIASES = {
     "momentum10": "mom_10",
     "mom": "mom_10",
     "MOM_10": "mom_10",
+    # TSI (True Strength Index)
+    "tsi": "tsi",
+    "TSI_25_13": "tsi",
+    # SMI (Stochastic Momentum Index)
+    "smi": "smi",
+    "SMI_13_25_13": "smi",
+    # SuperTrend
+    "superTrendDirection": "supertrend_direction",
+    "SUPERTd_7_3.0": "supertrend_direction",
+    # mswSine → sine-weighted MA (approximate with EMA as fallback)
+    "mswSine": "ema_21",
     "cmo14": "cmo_14",
     "cmo": "cmo_14",
     "CMO_14": "cmo_14",
@@ -121,20 +194,22 @@ INDICATOR_ALIASES = {
     "natr": "natr_14",
     "NATR_14": "natr_14",
     "bollingerBandwidth": "bb_width",
-    "bollingerPercentB": "bb_percent",
+    "bollingerPercentB": "bb_pct",
     "bbBandwidth": "bb_width",
-    "bbPercentB": "bb_percent",
+    "bbPercentB": "bb_pct",
     "bbUpper": "bb_upper",
     "bbLower": "bb_lower",
     "bbMiddle": "bb_middle",
     "BBB_5_2.0_2.0": "bb_width",
-    "BBP_5_2.0_2.0": "bb_percent",
+    "BBP_5_2.0_2.0": "bb_pct",
     "BBU_5_2.0_2.0": "bb_upper",
     "BBL_5_2.0_2.0": "bb_lower",
     "BBM_5_2.0_2.0": "bb_middle",
     "BBW_20": "bb_width",
-    "PERCENT_B": "bb_percent",
-    "bb_percent_b": "bb_percent",
+    "BBB_20_2.0": "bb_width",
+    "bb_bandwidth": "bb_width",
+    "PERCENT_B": "bb_pct",
+    "bb_percent_b": "bb_pct",
     "bollingerUpper": "bb_upper",
     "bollingerLower": "bb_lower",
     # =========================================================================
@@ -194,9 +269,11 @@ INDICATOR_ALIASES = {
     # =========================================================================
     # MA Cross signals (precomputed as integers: 1=bullish, -1=bearish, 0=neutral)
     "maCross": "ma_cross_20_50",
+    "maTrend": "ma_cross_20_50",  # Same as maCross — position, not event
     "goldenCross": "golden_cross",
     "deathCross": "death_cross",
     "macdCross": "macd_cross",
+    "macdTrend": "macd_cross",  # Same as macdCross — position, not event
     "macdBullishCross": "macd_cross",  # Same column, check for > 0
     # Price vs MA percentages (precomputed)
     "priceVsEma9Pct": "price_vs_ema_9_pct",
@@ -255,10 +332,11 @@ INDICATOR_ALIASES = {
     # =========================================================================
     # TRIX
     # =========================================================================
-    "trix": "trix",
+    "trix": "trix_14",
     "trixSignal": "trix_signal",
-    "TRIX_18_9": "trix",
-    "TRIX_30_9": "trix",
+    "TRIX_14": "trix_14",
+    "TRIX_18_9": "trix_14",
+    "TRIX_30_9": "trix_14",
     "TRIXs_30_9": "trix_signal",
     # =========================================================================
     # Fisher Transform
@@ -273,7 +351,7 @@ INDICATOR_ALIASES = {
     # =========================================================================
     # Linear Regression
     # =========================================================================
-    "linregSlope": "linreg",
+    "linregSlope": "linreg_slope",
     "linreg": "linreg",
     "LINREG_14": "linreg",
     # =========================================================================
@@ -325,10 +403,8 @@ INDICATOR_ALIASES = {
     # =========================================================================
     # Time-based Indicators
     # =========================================================================
-    "dayOfWeek": "day_of_week",
-    "hourOfDay": "hour_of_day",
-    "hour": "hour_of_day",
-    "day": "day_of_week",
+    # dayOfWeek, hourOfDay, month — handled by COMPUTED_INDICATORS, not aliases
+    # (no DB column for these; computed from candle timestamp on-the-fly)
     "isMonday": "is_monday",
     "isThursday": "is_thursday",
     # NOTE: isUSMarketHours defined above in precomputed section (line 236)
@@ -364,11 +440,16 @@ INDICATOR_CANONICAL = {v: k for k, v in INDICATOR_ALIASES.items()}
 # =============================================================================
 
 COMPUTED_INDICATORS = {
-    # Cross conditions
+    # Trend position indicators (1=bullish, -1=bearish, 0=neutral)
+    # NOTE: These return POSITION (fast > slow), not crossover EVENTS
+    "maTrend",  # MA position: fast vs slow
+    "macdTrend",  # MACD line vs signal position
+    "stochTrend",  # Stoch K vs D position
+    # Legacy names — kept for backward compat, same as trend
     "goldenCross",
     "deathCross",
-    "maCross",
-    "macdCross",
+    "maCross",  # Alias for maTrend
+    "macdCross",  # Alias for macdTrend
     "macdBullishCross",
     "macdBearishCross",
     "stochasticCross",
@@ -433,6 +514,9 @@ COMPUTED_INDICATORS = {
     "isEuropeanSession",
     "isUSMarketHours",
     "isWeekend",
+    "dayOfWeek",
+    "hourOfDay",
+    "month",
     "isMonday",
     "isTuesday",
     "isWednesday",
@@ -468,9 +552,11 @@ def compute_derived_indicator(
     params = condition.get("params", {}) if condition else {}
 
     # ==========================================================================
-    # MA Cross indicators - return 1 (bullish cross), -1 (bearish cross), or 0
+    # MA Trend indicators - return 1 (fast > slow), -1 (fast < slow), or 0
+    # NOTE: These are POSITION indicators, not crossover events.
+    # maCross is kept as alias for backward compatibility.
     # ==========================================================================
-    if name == "maCross":
+    if name in ("maCross", "maTrend"):
         # Get MA periods from params
         fast_period = params.get("fastPeriod", 20)
         slow_period = params.get("slowPeriod", 50)
@@ -515,9 +601,9 @@ def compute_derived_indicator(
         return None
 
     # ==========================================================================
-    # MACD Cross indicators
+    # MACD Trend indicators (position, not crossover event)
     # ==========================================================================
-    if name in ("macdBullishCross", "macdCross"):
+    if name in ("macdBullishCross", "macdCross", "macdTrend"):
         macd = indicators.get("macd_line") or indicators.get("MACD_12_26_9")
         signal = indicators.get("macd_signal") or indicators.get("MACDs_12_26_9")
         if macd is not None and signal is not None:
@@ -678,13 +764,13 @@ def compute_derived_indicator(
     # Bollinger conditions
     # ==========================================================================
     if name == "bbAtUpper":
-        bb_percent = indicators.get("bb_percent") or indicators.get("PERCENT_B")
+        bb_percent = indicators.get("bb_pct") or indicators.get("PERCENT_B")
         if bb_percent is not None:
             return 1 if bb_percent > 0.95 else 0
         return None
 
     if name == "bbAtLower":
-        bb_percent = indicators.get("bb_percent") or indicators.get("PERCENT_B")
+        bb_percent = indicators.get("bb_pct") or indicators.get("PERCENT_B")
         if bb_percent is not None:
             return 1 if bb_percent < 0.05 else 0
         return None
@@ -789,6 +875,16 @@ def compute_derived_indicator(
             if name == "isFriday":
                 return 1 if weekday == 4 else 0
 
+            # Raw time values for patterns that use numeric time conditions
+            if name == "dayOfWeek":
+                return weekday  # 0=Mon, 1=Tue, ..., 6=Sun
+
+            if name == "hourOfDay":
+                return hour
+
+            if name == "month":
+                return dt.month  # 1-12
+
         except (ValueError, OSError):
             return None
 
@@ -829,6 +925,41 @@ def compute_derived_indicator(
 # Indicator bounds for confidence calculation
 # Uses PostgreSQL enhanced_candles column names (lowercase with underscores)
 INDICATOR_BOUNDS = {
+    # =========================================================================
+    # Motion Derivatives (z-score normalized, typically -5 to 5)
+    # =========================================================================
+    # Close price derivatives
+    "close_velocity_zscore": (-5, 5),
+    "close_acceleration_zscore": (-5, 5),
+    "close_jerk_zscore": (-5, 5),
+    "close_snap_zscore": (-5, 5),
+    "close_crackle_zscore": (-5, 5),
+    "close_pop_zscore": (-5, 5),
+    # Raw derivatives (unbounded, use large range)
+    "close_velocity": (-1000, 1000),
+    "close_acceleration": (-500, 500),
+    "close_jerk": (-200, 200),
+    "close_snap": (-100, 100),
+    "close_crackle": (-50, 50),
+    "close_pop": (-25, 25),
+    # RSI derivatives (z-score)
+    "rsi_14_velocity_zscore": (-5, 5),
+    "rsi_14_acceleration_zscore": (-5, 5),
+    "rsi_14_jerk_zscore": (-5, 5),
+    # MACD derivatives (z-score)
+    "macd_histogram_velocity_zscore": (-5, 5),
+    "macd_histogram_acceleration_zscore": (-5, 5),
+    "macd_histogram_jerk_zscore": (-5, 5),
+    # OBV derivatives (z-score)
+    "obv_velocity_zscore": (-5, 5),
+    "obv_acceleration_zscore": (-5, 5),
+    # ATR derivatives (z-score)
+    "atr_14_velocity_zscore": (-5, 5),
+    "atr_14_acceleration_zscore": (-5, 5),
+    # Divergence flags (boolean: 0 or 1)
+    "close_accel_jerk_div": (0, 1),
+    "price_vs_rsi_vel_div": (0, 1),
+    # =========================================================================
     # RSI variants (0-100)
     "rsi_14": (0, 100),
     "rsi_7": (0, 100),
@@ -862,10 +993,10 @@ INDICATOR_BOUNDS = {
     "roc_10": (-20, 20),
     "mom_10": (-50, 50),
     # Bollinger %B (0 to 1, can exceed)
-    "bb_percent": (-0.5, 1.5),
+    "bb_pct": (-0.5, 1.5),
     "bb_width": (0, 1),
     # TRIX (typically -0.5 to 0.5)
-    "trix": (-0.5, 0.5),
+    "trix_14": (-0.5, 0.5),
     # DPO (typically -50 to 50)
     "dpo": (-50, 50),
     # Fisher Transform (typically -5 to 5)
@@ -1002,6 +1133,7 @@ class MatchResult:
 def evaluate_conditions(
     conditions: dict[str, dict] | list[dict],
     indicators: dict[str, float],
+    match_threshold: float = 1.0,
 ) -> MatchResult:
     """
     Evaluate pattern entry/exit conditions against indicator values.
@@ -1010,6 +1142,10 @@ def evaluate_conditions(
         conditions: Dict of indicator -> {operator, value} conditions,
                    OR list of {indicator, operator, value} dicts.
         indicators: Dict of indicator -> current value.
+        match_threshold: Fraction of evaluable conditions that must be met
+                        to consider the pattern matched (0.0-1.0).
+                        Default 1.0 = all conditions must match (legacy behavior).
+                        Use e.g. 0.6 for paper trading to relax matching.
 
     Returns:
         MatchResult with confidence and condition details.
@@ -1187,21 +1323,36 @@ def evaluate_conditions(
             }
         )
 
-    # Calculate overall confidence
-    if confidences:
-        overall_confidence = sum(confidences) / len(confidences)
+    # Count evaluable conditions (exclude missing/nan indicators)
+    evaluable = sum(
+        1 for d in details
+        if d.get("status") not in ("missing", "nan", "type_mismatch")
+    )
+
+    # Weighted confidence sum: each condition contributes 1/N of total score,
+    # scaled by its logarithmic depth into the threshold.
+    # A condition deeply past its threshold contributes close to 1/N.
+    # A condition barely past contributes ~0.1/N.
+    # A condition that misses contributes its decay value / N (near zero).
+    if evaluable > 0:
+        weight_per_condition = 1.0 / evaluable
+        overall_confidence = 0.0
+        for d in details:
+            if d.get("status") in ("missing", "nan", "type_mismatch"):
+                continue
+            conf = d.get("confidence")
+            if conf is not None and conf > 0:
+                overall_confidence += conf * weight_per_condition
+        matched = overall_confidence >= match_threshold and met_count >= 1
     else:
         overall_confidence = 0.0
-
-    # Pattern matches if all conditions are met
-    total_conditions = len([d for d in details if d.get("status") not in ("missing", "nan")])
-    matched = met_count == total_conditions and total_conditions > 0
+        matched = False
 
     return MatchResult(
         matched=matched,
         confidence=overall_confidence,
         conditions_met=met_count,
-        conditions_total=total_conditions,
+        conditions_total=evaluable,
         condition_details=details,
     )
 

@@ -76,7 +76,7 @@ def wait_for_vllm(model: str, timeout: int = 300) -> bool:
                     loaded = data["data"][0]["id"]
                     if model in loaded or loaded in model:
                         return True
-        except Exception:
+        except:
             pass
         time.sleep(3)
     return False
@@ -143,7 +143,7 @@ async def test_model(model: str, sample_candles: list, conn, max_samples: int = 
                         data = json.loads(match.group())
                         choice = str(data.get("choice", "S")).upper().strip('"')
                         reasoning = data.get("reasoning", "") or data.get("primary_signal", "")
-                    except Exception:
+                    except:
                         pass
 
                 # Map semantic labels to buy decision

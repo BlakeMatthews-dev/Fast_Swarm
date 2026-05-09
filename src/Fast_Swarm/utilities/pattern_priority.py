@@ -268,7 +268,7 @@ async def update_priority_after_backtest(
     stats = result.fetchone()
     total = stats[0] or 1
     rank = stats[1] or 0
-    is_in_top_fitness = (rank / total) >= 0.5
+    is_in_top_fitness = (rank / total) <= 0.5
 
     # Calculate new priority
     priority, reason = calculate_single_priority(

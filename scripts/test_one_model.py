@@ -25,7 +25,7 @@ def get_model_name():
     try:
         resp = httpx.get(f"{VLLM_URL}/v1/models", timeout=5.0)
         return resp.json()["data"][0]["id"]
-    except Exception:
+    except:
         return None
 
 

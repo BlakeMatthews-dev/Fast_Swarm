@@ -39,7 +39,9 @@ async def get_unassigned_coaches(session: AsyncSession) -> list[Coach]:
         List of coaches without trio assignment
     """
     # Get all coach IDs that are in active trios
-    trio_result = await session.exec(select(Trio).where(Trio.status == "active"))
+    trio_result = await session.exec(
+        select(Trio).where(Trio.status == "active")
+    )
     active_trios = trio_result.all()
 
     assigned_ids = set()
@@ -58,7 +60,9 @@ async def get_unassigned_coaches(session: AsyncSession) -> list[Coach]:
         )
     else:
         coach_result = await session.exec(
-            select(Coach).where(Coach.status == "active").order_by(Coach.elo_rating.desc())
+            select(Coach)
+            .where(Coach.status == "active")
+            .order_by(Coach.elo_rating.desc())
         )
 
     return list(coach_result.all())
@@ -134,7 +138,9 @@ async def get_trio_coaches(
 ) -> list[Coach]:
     """Get the 3 coaches in a trio."""
     result = await session.exec(
-        select(Coach).where(Coach.coach_id.in_([trio.coach_id_1, trio.coach_id_2, trio.coach_id_3]))
+        select(Coach).where(
+            Coach.coach_id.in_([trio.coach_id_1, trio.coach_id_2, trio.coach_id_3])
+        )
     )
     return list(result.all())
 
@@ -162,7 +168,9 @@ async def find_trios_needing_regroup(
     session: AsyncSession,
 ) -> list[Trio]:
     """Find all trios that need regrouping due to ELO divergence."""
-    result = await session.exec(select(Trio).where(Trio.status == "active"))
+    result = await session.exec(
+        select(Trio).where(Trio.status == "active")
+    )
     active_trios = result.all()
 
     needs_regroup = []
@@ -223,7 +231,11 @@ async def get_coach_trio(
     result = await session.exec(
         select(Trio)
         .where(Trio.status == "active")
-        .where((Trio.coach_id_1 == coach_id) | (Trio.coach_id_2 == coach_id) | (Trio.coach_id_3 == coach_id))
+        .where(
+            (Trio.coach_id_1 == coach_id)
+            | (Trio.coach_id_2 == coach_id)
+            | (Trio.coach_id_3 == coach_id)
+        )
     )
     return result.first()
 
@@ -232,7 +244,11 @@ async def get_all_active_trios(
     session: AsyncSession,
 ) -> list[Trio]:
     """Get all active trios."""
-    result = await session.exec(select(Trio).where(Trio.status == "active").order_by(Trio.created_at.desc()))
+    result = await session.exec(
+        select(Trio)
+        .where(Trio.status == "active")
+        .order_by(Trio.created_at.desc())
+    )
     return list(result.all())
 
 
@@ -241,13 +257,19 @@ async def get_trio_stats(
 ) -> dict[str, Any]:
     """Get statistics about current trio state."""
     # Count trios by status
-    active_result = await session.exec(select(func.count(Trio.id)).where(Trio.status == "active"))
+    active_result = await session.exec(
+        select(func.count(Trio.id)).where(Trio.status == "active")
+    )
     active_count = active_result.one()
 
-    regrouping_result = await session.exec(select(func.count(Trio.id)).where(Trio.status == "regrouping"))
+    regrouping_result = await session.exec(
+        select(func.count(Trio.id)).where(Trio.status == "regrouping")
+    )
     regrouping_count = regrouping_result.one()
 
-    completed_result = await session.exec(select(func.count(Trio.id)).where(Trio.status == "completed"))
+    completed_result = await session.exec(
+        select(func.count(Trio.id)).where(Trio.status == "completed")
+    )
     completed_count = completed_result.one()
 
     # Get spread statistics for active trios

@@ -43,16 +43,6 @@ class DataCollectorService:
         # Key: "(exchange, symbol)" -> {"open": float, "high": float, "low": float, "close": float, "volume": float, "minute_ts": int}
         self._minute_candles: dict[str, dict] = {}
 
-        # Store background task references to prevent garbage collection
-        self._background_tasks: set[asyncio.Task] = set()
-
-    def _create_background_task(self, coro) -> asyncio.Task:
-        """Create a background task and track it to prevent GC."""
-        task = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-        return task
-
     async def verify_and_backfill(self, symbols: dict[str, list[str]]):
         """
         Check for gaps in historical data and run backfillers.
@@ -103,7 +93,7 @@ class DataCollectorService:
 
         # Check if we need to flush tick batch
         if len(self._write_queue_ticks) >= self._tick_batch_size:
-            self._create_background_task(self._flush_tick_batch())
+            asyncio.create_task(self._flush_tick_batch())
 
         # 2. Build 1-minute candle from ticks
         key = f"{trade_data.exchange}:{trade_data.symbol}"
@@ -182,7 +172,7 @@ class DataCollectorService:
         )
 
         # Trigger aggregation to higher timeframes
-        self._create_background_task(self._aggregate_to_higher_timeframes(finished_candle))
+        asyncio.create_task(self._aggregate_to_higher_timeframes(finished_candle))
 
     async def _flush_tick_batch(self):
         """Flush queued ticks to database."""
@@ -244,11 +234,11 @@ class DataCollectorService:
 
             # Trigger aggregation to higher timeframes for 1m candles
             if kline_data.timeframe == "1m":
-                self._create_background_task(self._aggregate_to_higher_timeframes(candle))
+                asyncio.create_task(self._aggregate_to_higher_timeframes(candle))
 
             # Check if we need to flush
             if len(self._write_queue_candles) >= self._batch_size:
-                self._create_background_task(self._flush_batches())
+                asyncio.create_task(self._flush_batches())
 
             logger.debug(
                 f"Closed kline: {kline_data.symbol} {kline_data.timeframe} "
@@ -288,7 +278,7 @@ class DataCollectorService:
 
         # Flush if batch full
         if len(self._write_queue_orderbooks) >= self._batch_size:
-            self._create_background_task(self._flush_orderbook_batch())
+            asyncio.create_task(self._flush_orderbook_batch())
 
     async def _flush_orderbook_batch(self):
         """Flush queued order book snapshots to database."""

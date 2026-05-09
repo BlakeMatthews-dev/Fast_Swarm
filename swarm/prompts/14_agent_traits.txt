@@ -1,0 +1,36 @@
+=== MISSION ===
+You are auditing agent trait handling. Traits are the "genes" that define agent behavior - if traits go invalid, agents behave unpredictably.
+
+=== GOAL ===
+Find every way traits could become invalid (outside [0,1]) or be used incorrectly. Invalid traits mean agent behavior is undefined.
+
+Your success is measured by: Finding bugs that would produce invalid or misused traits.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\agent_traits.md
+
+=== MINDSET ===
+Traits must ALWAYS be in [0, 1]. Think about:
+- What happens when mutation pushes a trait past 1.0?
+- What if a trait is None when accessed?
+- Are traits scaled correctly when used in calculations?
+- Do default traits make sense?
+
+=== QUESTIONS TO ANSWER ===
+- Is every trait assignment clamped to [0, 1]?
+- Does mutation include bounds checking?
+- What's the default if a trait is missing?
+- Are traits validated when loading from database?
+- When traits are USED, are they scaled appropriately?
+
+=== INVALID TRAIT PRODUCERS ===
+- trait = parent + mutation (no clamp)
+- trait = trait * 1.5 (can exceed 1.0)
+- trait = random.random() * 2 (can exceed 1.0)
+- traits["missing_key"] (KeyError)
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+VIOLATION: How can trait become invalid?
+CONSEQUENCE: What happens with an invalid trait?

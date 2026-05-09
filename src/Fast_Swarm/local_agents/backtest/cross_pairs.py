@@ -133,6 +133,12 @@ def synthesize_cross_pairs_df(
     eth = eth.loc[common_idx]
     sol = sol.loc[common_idx]
 
+    # Guard against zero/negative lows that cause division errors
+    valid = (btc["low"] > 0) & (btc["high"] > 0) & (eth["low"] > 0) & (eth["high"] > 0) & (sol["low"] > 0) & (sol["high"] > 0)
+    if not valid.all():
+        btc, eth, sol = btc[valid], eth[valid], sol[valid]
+        common_idx = common_idx[valid]
+
     result = {}
 
     # ETH/BTC = ETH-USD / BTC-USD

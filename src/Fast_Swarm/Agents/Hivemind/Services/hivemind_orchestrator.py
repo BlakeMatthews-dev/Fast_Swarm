@@ -275,6 +275,8 @@ class HivemindOrchestrator:
                     client.on_kline(self._data_feed._handle_kline)
                 if hasattr(client, "on_book_ticker"):
                     client.on_book_ticker(self._data_feed._handle_ticker)
+                    # Also register paper trading price update callback
+                    client.on_book_ticker(self._create_ticker_callback(name))
 
                 # Create connection task
                 tasks.append(self._connect_and_subscribe(client, symbols))
@@ -369,6 +371,23 @@ class HivemindOrchestrator:
             snapshot: Market data snapshot
         """
         try:
+            # =================================================================
+            # Bear Protection Check - VETO POWER before voting
+            # If defensive_trigger is active, block new positions entirely
+            # =================================================================
+            defensive_trigger = snapshot.indicators.get("defensive_trigger")
+            if defensive_trigger == 1:
+                logger.warning(
+                    "BEAR PROTECTION: Blocking trio %s vote for %s - defensive_trigger active "
+                    "(acc=%.2f, adx_jerk=%.2f)",
+                    trio.trio_id[:8],
+                    snapshot.symbol,
+                    snapshot.indicators.get("close_acceleration_zscore", 0),
+                    snapshot.indicators.get("adx_14_jerk_zscore", 0),
+                )
+                # TODO: Could also force-close existing positions here
+                return
+
             # Execute voting round
             decision, leg = await execute_trio_voting_round(
                 session=session,
@@ -490,6 +509,56 @@ class HivemindOrchestrator:
                 position.unrealized_pnl,
             )
 
+    def _create_ticker_callback(self, exchange_name: str):
+        """
+        Create a ticker callback for a specific exchange.
+
+        Returns a closure that extracts price from BookTickerData and
+        updates paper trading clients.
+        """
+        def callback(ticker_data):
+            # Extract symbol and price from BookTickerData
+            symbol = getattr(ticker_data, "symbol", None)
+            # Try different price attributes (exchanges use different names)
+            price = (
+                getattr(ticker_data, "price", None) or
+                getattr(ticker_data, "last_price", None) or
+                getattr(ticker_data, "bid_price", None) or
+                0
+            )
+            if symbol and price > 0:
+                self._on_ticker_update(symbol, price, exchange_name)
+
+        return callback
+
+    def _on_ticker_update(self, symbol: str, price: float, exchange: str = ""):
+        """
+        Handle ticker/price update - updates paper trading clients.
+
+        This wires live price data to paper trading clients so they can:
+        1. Update position mark-to-market pricing
+        2. Check and fill pending limit orders
+        3. Evaluate stop loss / take profit conditions
+
+        Args:
+            symbol: Trading symbol (e.g., "BTCUSDT")
+            price: Current price
+            exchange: Exchange name (optional)
+        """
+        if price <= 0:
+            return
+
+        # Update paper trading clients with new price
+        for agent_name, agent in self._portfolio_agents.items():
+            client = agent.client
+            # Check if this is a paper trading client with set_price method
+            if hasattr(client, "set_price"):
+                client.set_price(symbol, price)
+
+            # Check pending limit orders
+            if hasattr(client, "check_pending_orders"):
+                client.check_pending_orders(symbol, price)
+
     # =========================================================================
     # ELO Scoring
     # =========================================================================
@@ -543,7 +612,10 @@ class HivemindOrchestrator:
                 }
                 for name, client in self._ws_clients.items()
             },
-            "portfolio_agents": {name: agent.get_status() for name, agent in self._portfolio_agents.items()},
+            "portfolio_agents": {
+                name: agent.get_status()
+                for name, agent in self._portfolio_agents.items()
+            },
             "data_feed": self._data_feed.get_status(),
             "active_trades": len(self._active_trades),
             "pending_legs": len(self._pending_legs),

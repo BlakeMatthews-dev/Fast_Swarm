@@ -19,15 +19,24 @@ Each exchange has its own Portfolio Agent instance.
 
 import asyncio
 import logging
+import random
 import uuid
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
+from decimal import Decimal
 from typing import Any
 
+from Fast_Swarm.Infrastructure.Models.market_data_models import PaperTrade
+
 logger = logging.getLogger(__name__)
+
+# Paper trading constants
+DEFAULT_ORDER_EXPIRY_HOURS = 24
+ALLOWED_CLOSE_FRACTIONS = [0.25, 0.50, 0.75, 1.00]
 
 
 # =============================================================================
@@ -283,6 +292,17 @@ class PaperTradingClient(ExchangeClient):
         # Mock prices (should be updated from live feed)
         self._prices: dict[str, float] = {}
 
+        # Trade history and events (NEW)
+        self.trade_history: deque = deque(maxlen=10000)  # In-memory buffer
+        self.trade_legs: list = []  # Partial close tracking
+        self.pending_orders: dict[str, dict] = {}  # Resting limit orders
+        self._event_callbacks: list = []
+        self._db_flush_queue: asyncio.Queue = asyncio.Queue()
+        self._flush_task = None
+
+        # P&L tracking
+        self.realized_pnl: float = 0.0
+
     def set_price(self, symbol: str, price: float):
         """Update mock price (call from data feed)."""
         self._prices[symbol] = price
@@ -303,25 +323,45 @@ class PaperTradingClient(ExchangeClient):
         if price == 0:
             return {"error": "no_price", "message": "No price for " + symbol}
 
-        # Apply slippage
-        if side == "buy":
-            fill_price = price * (1 + self.slippage_bps / 10000)
-        else:
-            fill_price = price * (1 - self.slippage_bps / 10000)
+        # Apply slippage with variance (realistic simulation)
+        fill_price = self._apply_slippage(price, side, size)
 
         # Calculate commission
         notional = size * fill_price
         commission = notional * self.fee_bps / 10000
 
-        # Update balance
+        # Update balance based on side
         if side == "buy":
             cost = notional + commission
             if self.balance.get("USD", 0) < cost:
                 return {"error": "insufficient_funds", "message": "Not enough USD"}
             self.balance["USD"] -= cost
         else:
-            # For sells, we need to have the position
-            pass  # Simplified for now
+            # SELL: Validate position exists and has sufficient size
+            pos = self.positions.get(symbol)
+            if not pos:
+                return {"error": "no_position", "message": f"No position in {symbol}"}
+
+            if pos["side"] == "long":
+                if pos["size"] < size:
+                    return {
+                        "error": "insufficient_size",
+                        "message": f"Position {pos['size']:.6f} < sell size {size:.6f}",
+                    }
+
+                # Calculate realized P&L for the closing portion
+                pnl = (fill_price - pos["entry_price"]) * size
+                proceeds = notional - commission
+                self.balance["USD"] += proceeds
+                self.realized_pnl += pnl
+
+                logger.info(
+                    "[Paper] SELL %s: size=%.6f, entry=$%.2f, exit=$%.2f, P&L=$%.2f",
+                    symbol, size, pos["entry_price"], fill_price, pnl
+                )
+            else:
+                # Covering a short position (not implemented for long-only)
+                return {"error": "short_not_supported", "message": "Long-only mode"}
 
         # Create order record
         order_id = str(uuid.uuid4())[:8]
@@ -338,10 +378,31 @@ class PaperTradingClient(ExchangeClient):
 
         self.orders[order_id] = order
 
-        # Update position
+        # Update position tracking
         self._update_position(symbol, side, size, fill_price)
 
+        # Record trade to history and emit event
+        self._record_trade(order)
+
         return order
+
+    def _apply_slippage(self, price: float, side: str, size: float) -> float:
+        """Apply realistic slippage with variance."""
+        # Base slippage + random component (Gaussian)
+        base_bps = self.slippage_bps
+        variance_bps = random.gauss(0, base_bps * 0.5)  # 50% std dev
+
+        # Size-dependent slippage (larger orders = more slippage)
+        notional = size * price
+        size_factor = 1.0 + (notional / 10000) * 0.1  # +10% per $10k
+
+        total_bps = (base_bps + variance_bps) * size_factor
+        total_bps = max(0, total_bps)  # No negative slippage
+
+        if side == "buy":
+            return price * (1 + total_bps / 10000)
+        else:
+            return price * (1 - total_bps / 10000)
 
     async def place_limit_order(
         self,
@@ -350,16 +411,107 @@ class PaperTradingClient(ExchangeClient):
         size: float,
         price: float,
         time_in_force: str = "GTC",
+        expiry_hours: float | None = None,
     ) -> dict:
-        # For paper trading, treat limit orders as market orders
-        # (instant fill at limit price if favorable)
-        current_price = self._prices.get(symbol, 0)
+        """
+        Place limit order with 24h default expiry.
 
+        If price is immediately favorable, fills as market order.
+        Otherwise, order rests on book until filled, cancelled, or expired.
+        """
+        current_price = self._prices.get(symbol, 0)
+        expiry = expiry_hours or DEFAULT_ORDER_EXPIRY_HOURS
+
+        # Check if immediately fillable
         if (side == "buy" and current_price <= price) or (side == "sell" and current_price >= price):
             return await self.place_market_order(symbol, side, size)
+
+        # Rest order on book with expiry
+        order_id = str(uuid.uuid4())[:8]
+        created = datetime.now(UTC)
+        order = {
+            "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "size": size,
+            "limit_price": price,
+            "time_in_force": time_in_force,
+            "status": "pending",
+            "created_at": created.isoformat(),
+            "expires_at": (created + timedelta(hours=expiry)).isoformat(),
+        }
+
+        self.pending_orders[order_id] = order
+        self.orders[order_id] = order
+
+        logger.info(
+            "[Paper] Limit order placed: %s %s %.6f @ $%.2f (expires in %dh)",
+            side.upper(), symbol, size, price, int(expiry)
+        )
+
+        return order
+
+    def check_pending_orders(self, symbol: str, price: float):
+        """
+        Called on each price update to check fills and expiries.
+
+        Should be wired to the price feed callback in hivemind_orchestrator.
+        """
+        now = datetime.now(UTC)
+        orders_to_remove = []
+
+        for order_id, order in list(self.pending_orders.items()):
+            # Check expiry
+            expires_at = datetime.fromisoformat(order["expires_at"])
+            if now >= expires_at:
+                order["status"] = "expired"
+                self._emit_event("order_expired", order)
+                orders_to_remove.append(order_id)
+                logger.info("[Paper] Order expired: %s", order_id)
+                continue
+
+            if order["symbol"] != symbol or order["status"] != "pending":
+                continue
+
+            # Check if price crossed limit
+            limit_price = order["limit_price"]
+            if (order["side"] == "buy" and price <= limit_price) or \
+               (order["side"] == "sell" and price >= limit_price):
+                # Fill the order
+                asyncio.create_task(self._fill_pending_order(order_id, price))
+
+        # Clean up expired orders
+        for order_id in orders_to_remove:
+            self.pending_orders.pop(order_id, None)
+
+    async def _fill_pending_order(self, order_id: str, fill_price: float):
+        """Fill a pending limit order."""
+        order = self.pending_orders.get(order_id)
+        if not order or order["status"] != "pending":
+            return
+
+        # Mark as filling to prevent double-fill
+        order["status"] = "filling"
+
+        result = await self.place_market_order(
+            symbol=order["symbol"],
+            side=order["side"],
+            size=order["size"],
+        )
+
+        if "error" not in result:
+            order["status"] = "filled"
+            order["filled_at"] = datetime.now(UTC).isoformat()
+            order["fill_price"] = result.get("price", fill_price)
+            self._emit_event("order_filled", order)
+            logger.info("[Paper] Limit order filled: %s @ $%.2f", order_id, order["fill_price"])
         else:
-            # Order would rest on book - simplified: just reject
-            return {"error": "limit_not_filled", "message": "Price not favorable"}
+            order["status"] = "failed"
+            order["error"] = result.get("error")
+            self._emit_event("order_failed", order)
+
+        # Remove from pending
+        self.pending_orders.pop(order_id, None)
 
     async def cancel_order(self, order_id: str, symbol: str) -> bool:
         if order_id in self.orders:
@@ -378,6 +530,174 @@ class PaperTradingClient(ExchangeClient):
             "bid": price * 0.9999,
             "ask": price * 1.0001,
         }
+
+    # =========================================================================
+    # Event Callbacks and Trade History
+    # =========================================================================
+
+    def on_trade_event(self, callback):
+        """Register callback for trade events (fills, cancels, expiries, etc)."""
+        self._event_callbacks.append(callback)
+
+    def _emit_event(self, event_type: str, data: dict):
+        """Emit event to all registered callbacks."""
+        event = {
+            "type": event_type,
+            "data": data,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        for cb in self._event_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    asyncio.create_task(cb(event))
+                else:
+                    cb(event)
+            except Exception as e:
+                logger.error("Event callback error: %s", e)
+
+    def _record_trade(self, trade: dict):
+        """Record trade to history and queue for DB flush."""
+        self.trade_history.append(trade)
+        self._db_flush_queue.put_nowait(trade)
+        self._emit_event("trade_executed", trade)
+
+    async def _flush_to_db(self, session_factory):
+        """
+        Background task to flush trades to PostgreSQL.
+
+        Call this in a background task to persist trade history.
+        """
+        while True:
+            trades_to_flush = []
+            # Batch up to 100 trades
+            for _ in range(100):
+                try:
+                    trade = self._db_flush_queue.get_nowait()
+                    trades_to_flush.append(trade)
+                except asyncio.QueueEmpty:
+                    break
+
+            if trades_to_flush:
+                try:
+                    async with session_factory() as session:
+                        await self._insert_trades(session, trades_to_flush)
+                        await session.commit()
+                except Exception as e:
+                    logger.error("DB flush error: %s", e)
+                    # Re-queue failed trades
+                    for trade in trades_to_flush:
+                        self._db_flush_queue.put_nowait(trade)
+
+            await asyncio.sleep(5)  # Flush every 5 seconds
+
+    async def _insert_trades(self, session, trades: list[dict]):
+        """Insert trades to paper_trades table."""
+        for trade in trades:
+            paper_trade = PaperTrade(
+                order_id=trade.get("order_id", ""),
+                agent_id=trade.get("agent_id"),
+                symbol=trade.get("symbol", ""),
+                side=trade.get("side", ""),
+                size=Decimal(str(trade.get("size", 0))),
+                price=Decimal(str(trade.get("price", 0))),
+                commission=Decimal(str(trade.get("commission", 0))),
+                filled_at=datetime.fromisoformat(trade["filled_at"])
+                if isinstance(trade.get("filled_at"), str)
+                else trade.get("filled_at", datetime.now(UTC)),
+                entry_price=Decimal(str(trade["entry_price"]))
+                if trade.get("entry_price")
+                else None,
+                realized_pnl=Decimal(str(trade["realized_pnl"]))
+                if trade.get("realized_pnl")
+                else None,
+                is_partial=trade.get("is_partial", False),
+                close_fraction=trade.get("close_fraction"),
+                parent_order_id=trade.get("parent_order_id"),
+            )
+            session.add(paper_trade)
+        logger.debug("Inserted %d trades to paper_trades table", len(trades))
+
+    # =========================================================================
+    # Partial Position Closes
+    # =========================================================================
+
+    async def close_position_partial(self, symbol: str, fraction: float) -> dict:
+        """
+        Close a fraction of position as a separate trade leg.
+
+        Args:
+            symbol: The symbol to close
+            fraction: One of ALLOWED_CLOSE_FRACTIONS (0.25, 0.50, 0.75, 1.00)
+
+        Returns:
+            Order result dict or error dict
+        """
+        if fraction not in ALLOWED_CLOSE_FRACTIONS:
+            return {
+                "error": "invalid_fraction",
+                "message": f"Fraction must be one of {ALLOWED_CLOSE_FRACTIONS}",
+                "allowed": ALLOWED_CLOSE_FRACTIONS,
+            }
+
+        pos = self.positions.get(symbol)
+        if not pos:
+            return {"error": "no_position", "message": f"No position in {symbol}"}
+
+        close_size = pos["size"] * fraction
+        entry_price = pos["entry_price"]
+
+        # Execute the sell
+        close_result = await self.place_market_order(symbol, "sell", close_size)
+
+        if "error" not in close_result:
+            exit_price = close_result.get("price", 0)
+
+            # Create separate trade leg record
+            leg = {
+                "leg_id": str(uuid.uuid4())[:8],
+                "parent_position_id": pos.get("position_id", symbol),
+                "symbol": symbol,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "size": close_size,
+                "pnl": (exit_price - entry_price) * close_size,
+                "fraction": fraction,
+                "closed_at": datetime.now(UTC).isoformat(),
+            }
+            self.trade_legs.append(leg)
+            self._emit_event("trade_leg_closed", leg)
+
+            logger.info(
+                "[Paper] Partial close %s: %.0f%% (%.6f units), P&L=$%.2f",
+                symbol, fraction * 100, close_size, leg["pnl"]
+            )
+
+        return close_result
+
+    def get_trade_history(self, limit: int = 100) -> list[dict]:
+        """Get recent trade history."""
+        return list(self.trade_history)[-limit:]
+
+    def get_trade_legs(self, symbol: str | None = None) -> list[dict]:
+        """Get trade legs, optionally filtered by symbol."""
+        if symbol:
+            return [leg for leg in self.trade_legs if leg["symbol"] == symbol]
+        return self.trade_legs.copy()
+
+    def get_portfolio_summary(self) -> dict:
+        """Get summary of paper trading portfolio."""
+        return {
+            "balance_usd": self.balance.get("USD", 0),
+            "realized_pnl": self.realized_pnl,
+            "positions": len(self.positions),
+            "pending_orders": len(self.pending_orders),
+            "total_trades": len(self.trade_history),
+            "trade_legs": len(self.trade_legs),
+        }
+
+    # =========================================================================
+    # Position Tracking
+    # =========================================================================
 
     def _update_position(self, symbol: str, side: str, size: float, price: float):
         """Update position tracking after fill."""
@@ -502,7 +822,8 @@ class PortfolioAgent:
         self._command_history[command.command_id] = command
         await self._pending_commands.put(command)
         logger.info(
-            "[%s] Command queued: %s %s %.4f", self.exchange, command.side.value, command.symbol, command.size_pct
+            "[%s] Command queued: %s %s %.4f",
+            self.exchange, command.side.value, command.symbol, command.size_pct
         )
         return command.command_id
 
@@ -512,7 +833,10 @@ class PortfolioAgent:
             try:
                 # Wait for command with timeout
                 try:
-                    command = await asyncio.wait_for(self._pending_commands.get(), timeout=1.0)
+                    command = await asyncio.wait_for(
+                        self._pending_commands.get(),
+                        timeout=1.0
+                    )
                 except TimeoutError:
                     continue
 
@@ -710,7 +1034,10 @@ class PortfolioAgent:
 
         # Clean old entries
         cutoff = now.timestamp() - 60
-        self._orders_this_minute = [t for t in self._orders_this_minute if t.timestamp() > cutoff]
+        self._orders_this_minute = [
+            t for t in self._orders_this_minute
+            if t.timestamp() > cutoff
+        ]
 
         return len(self._orders_this_minute) < self.risk_limits.max_orders_per_minute
 
@@ -792,22 +1119,17 @@ class PortfolioAgent:
 
                         if position.side == PositionSide.LONG:
                             position.unrealized_pnl = (price - position.entry_price) * position.size
-                            position.unrealized_pnl_pct = (
-                                (price - position.entry_price) / position.entry_price * 100
-                                if position.entry_price > 0
-                                else 0
-                            )
+                            position.unrealized_pnl_pct = (price - position.entry_price) / position.entry_price * 100 if position.entry_price > 0 else 0
                         elif position.side == PositionSide.SHORT:
                             position.unrealized_pnl = (position.entry_price - price) * position.size
-                            position.unrealized_pnl_pct = (
-                                (position.entry_price - price) / position.entry_price * 100
-                                if position.entry_price > 0
-                                else 0
-                            )
+                            position.unrealized_pnl_pct = (position.entry_price - price) / position.entry_price * 100 if position.entry_price > 0 else 0
 
                         # Track max drawdown
                         if position.unrealized_pnl_pct < 0:
-                            position.max_drawdown_pct = min(position.max_drawdown_pct, position.unrealized_pnl_pct)
+                            position.max_drawdown_pct = min(
+                                position.max_drawdown_pct,
+                                position.unrealized_pnl_pct
+                            )
 
                         position.updated_at = datetime.now(UTC)
 
@@ -848,14 +1170,12 @@ class PortfolioAgent:
 
     def _has_exit_rules(self, command: TradeCommand) -> bool:
         """Check if command has any exit rules defined."""
-        return any(
-            [
-                command.stop_loss_pct is not None,
-                command.take_profit_pct is not None,
-                command.trailing_stop_pct is not None,
-                command.timeout_minutes is not None,
-            ]
-        )
+        return any([
+            command.stop_loss_pct is not None,
+            command.take_profit_pct is not None,
+            command.trailing_stop_pct is not None,
+            command.timeout_minutes is not None,
+        ])
 
     def _register_exit_rules(self, command: TradeCommand, entry_price: float):
         """
@@ -920,12 +1240,12 @@ class PortfolioAgent:
         # Check stop loss
         if command.stop_loss_pct is not None:
             if pnl_pct <= -command.stop_loss_pct:
-                return f"stop_loss_triggered (loss: {pnl_pct * 100:.2f}%)"
+                return f"stop_loss_triggered (loss: {pnl_pct*100:.2f}%)"
 
         # Check take profit
         if command.take_profit_pct is not None:
             if pnl_pct >= command.take_profit_pct:
-                return f"take_profit_triggered (profit: {pnl_pct * 100:.2f}%)"
+                return f"take_profit_triggered (profit: {pnl_pct*100:.2f}%)"
 
         # Check trailing stop
         if command.trailing_stop_pct is not None:
@@ -940,7 +1260,7 @@ class PortfolioAgent:
                 if high_water > 0:
                     drop_from_high = (high_water - current_price) / high_water
                     if drop_from_high >= command.trailing_stop_pct:
-                        return f"trailing_stop_triggered (drop: {drop_from_high * 100:.2f}% from ${high_water:.2f})"
+                        return f"trailing_stop_triggered (drop: {drop_from_high*100:.2f}% from ${high_water:.2f})"
 
             elif position.side == PositionSide.SHORT:
                 # Update low water mark
@@ -953,7 +1273,7 @@ class PortfolioAgent:
                 if low_water > 0:
                     rise_from_low = (current_price - low_water) / low_water
                     if rise_from_low >= command.trailing_stop_pct:
-                        return f"trailing_stop_triggered (rise: {rise_from_low * 100:.2f}% from ${low_water:.2f})"
+                        return f"trailing_stop_triggered (rise: {rise_from_low*100:.2f}% from ${low_water:.2f})"
 
         # Check timeout
         if command.timeout_minutes is not None:
@@ -981,7 +1301,10 @@ class PortfolioAgent:
             logger.warning("[%s] Cannot close flat position %s", self.exchange, symbol)
             return
 
-        logger.info("[%s] Auto-exit triggered for %s: %s", self.exchange, symbol, reason)
+        logger.info(
+            "[%s] Auto-exit triggered for %s: %s",
+            self.exchange, symbol, reason
+        )
 
         # Create close command
         close_command = TradeCommand(
@@ -1004,9 +1327,15 @@ class PortfolioAgent:
         result = await self._execute_command(close_command)
 
         if result.status == OrderStatus.FILLED:
-            logger.info("[%s] Auto-exit completed for %s at $%.2f", self.exchange, symbol, result.filled_price)
+            logger.info(
+                "[%s] Auto-exit completed for %s at $%.2f",
+                self.exchange, symbol, result.filled_price
+            )
         else:
-            logger.error("[%s] Auto-exit failed for %s: %s", self.exchange, symbol, result.error_message)
+            logger.error(
+                "[%s] Auto-exit failed for %s: %s",
+                self.exchange, symbol, result.error_message
+            )
             # Re-register exit rules if close failed
             if original_command:
                 self._active_exit_rules[symbol] = original_command

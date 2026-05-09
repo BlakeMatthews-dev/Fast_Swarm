@@ -256,7 +256,7 @@ class PatternDiscoveryScheduler:
             winner_rows = []
 
         col_names = ["pnl_pct", "symbol", "timeframe"] + indicator_cols[:30]
-        winners = [dict(zip(col_names, row, strict=False)) for row in winner_rows]
+        winners = [dict(zip(col_names, row)) for row in winner_rows]
 
         # Load losers
         try:
@@ -274,7 +274,7 @@ class PatternDiscoveryScheduler:
         except Exception:
             loser_rows = []
 
-        losers = [dict(zip(col_names, row, strict=False)) for row in loser_rows]
+        losers = [dict(zip(col_names, row)) for row in loser_rows]
 
         return winners, losers, indicator_cols[:30]
 
@@ -349,7 +349,7 @@ class PatternDiscoveryScheduler:
     ) -> str:
         """Build the LLM prompt for pattern discovery."""
         avg_winner_pnl = sum(w["pnl_pct"] for w in winners) / len(winners) if winners else 0
-        avg_loser_pnl = sum(loser["pnl_pct"] for loser in losers) / len(losers) if losers else 0
+        avg_loser_pnl = sum(l["pnl_pct"] for l in losers) / len(losers) if losers else 0
         win_rate = len(winners) / (len(winners) + len(losers)) * 100 if (winners or losers) else 0
 
         feature_analysis = []

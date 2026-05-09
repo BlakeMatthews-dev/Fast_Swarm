@@ -350,7 +350,7 @@ def spawn_child(
     for p in parent_a.get("assigned_patterns", []):
         if isinstance(p, dict):
             pid = p.get("pattern_id", p.get("id", ""))
-            if pid:
+            if pid is not None:
                 patterns_by_id[pid] = p
         elif isinstance(p, str):
             # Legacy: if just ID, wrap in minimal dict
@@ -358,7 +358,7 @@ def spawn_child(
     for p in parent_b.get("assigned_patterns", []):
         if isinstance(p, dict):
             pid = p.get("pattern_id", p.get("id", ""))
-            if pid and pid not in patterns_by_id:
+            if pid is not None and pid not in patterns_by_id:
                 patterns_by_id[pid] = p
         elif isinstance(p, str):
             if p not in patterns_by_id:

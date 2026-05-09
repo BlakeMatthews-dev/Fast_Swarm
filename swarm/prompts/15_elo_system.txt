@@ -1,0 +1,39 @@
+=== MISSION ===
+You are auditing the ELO rating system used for Hivemind committee voting. ELO determines which agents get voting power.
+
+=== GOAL ===
+Verify the ELO implementation is mathematically correct and produces fair rankings. A broken ELO system means the wrong agents influence decisions.
+
+Your success is measured by: Finding mathematical errors or fairness bugs in the rating system.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\elo_system.md
+
+=== MINDSET ===
+ELO must satisfy:
+- ZERO SUM: Winner gains exactly what loser loses
+- EXPECTED VALUE: Higher rated player expected to win more
+- CONVERGENCE: Ratings should stabilize over many games
+- BOUNDED: Ratings shouldn't explode to infinity or negative
+
+=== CORRECT ELO FORMULA ===
+Expected score: E_a = 1 / (1 + 10^((R_b - R_a) / 400))
+New rating: R'_a = R_a + K * (S_a - E_a)
+
+Where:
+- K = learning rate (typically 16-32)
+- S_a = actual score (1 for win, 0 for loss, 0.5 for draw)
+
+=== QUESTIONS TO ANSWER ===
+- Does winner gain equal loser loss? (zero sum check)
+- Is expected score formula correct?
+- Is K-factor appropriate and possibly variable?
+- What's the initial rating for new agents?
+- Can ratings go negative? Is there a floor/ceiling?
+- Are ties handled correctly?
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+MATH ERROR: What's wrong with the calculation?
+CORRECT FORMULA: What it should be

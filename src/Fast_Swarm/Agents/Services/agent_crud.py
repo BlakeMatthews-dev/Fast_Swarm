@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -365,15 +365,19 @@ async def get_population_stats(session: AsyncSession) -> dict[str, Any]:
         - max_generation: Highest generation number
         - fitness_distribution: Buckets of fitness scores
     """
-    # Total count
-    total_result = await session.execute(select(func.count(Agent.id)))
-    total_count = total_result.scalar() or 0
+    # Single query for all aggregate stats
+    stats_result = await session.execute(
+        select(
+            func.count(Agent.id).label("total"),
+            func.sum(case((Agent.status == "active", 1), else_=0)).label("active"),
+            func.avg(Agent.fitness_score).label("avg_fitness"),
+            func.max(Agent.generation).label("max_gen"),
+        )
+    )
+    stats = stats_result.first()
+    total_count = stats.total or 0
+    active_count = stats.active or 0
 
-    # Active count
-    active_result = await session.execute(select(func.count(Agent.id)).where(Agent.status == "active"))
-    active_count = active_result.scalar() or 0
-
-    # Handle empty population
     if total_count == 0:
         return {
             "total_count": 0,
@@ -383,19 +387,14 @@ async def get_population_stats(session: AsyncSession) -> dict[str, Any]:
             "fitness_distribution": {"0-20": 0, "20-40": 0, "40-60": 0, "60-80": 0, "80-100": 0},
         }
 
-    # Average fitness
-    avg_result = await session.execute(select(func.avg(Agent.fitness_score)))
-    avg_fitness = avg_result.scalar() or 0.0
+    avg_fitness = float(stats.avg_fitness or 0.0)
+    max_generation = stats.max_gen or 0
 
-    # Max generation
-    max_gen_result = await session.execute(select(func.max(Agent.generation)))
-    max_generation = max_gen_result.scalar() or 0
-
-    # Fitness distribution
+    # Fitness distribution — single query, bucket in DB
     distribution = {"0-20": 0, "20-40": 0, "40-60": 0, "60-80": 0, "80-100": 0}
-    all_agents_result = await session.execute(select(Agent.fitness_score))
-    for row in all_agents_result.scalars().all():
-        fitness = row
+    all_fitness_result = await session.execute(select(Agent.fitness_score))
+    for row in all_fitness_result.scalars().all():
+        fitness = row or 0
         if fitness < 20:
             distribution["0-20"] += 1
         elif fitness < 40:

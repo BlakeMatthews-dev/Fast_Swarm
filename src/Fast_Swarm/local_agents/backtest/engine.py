@@ -585,21 +585,28 @@ class LocalBacktestEngine:
         config: BacktestConfig,
     ) -> list[TradeRecord]:
         """Run backtest for a single asset."""
+        # Calculate warmup lookback — need 200 candles before window start
+        # so indicators (SMA_200, etc.) are fully warmed at the window's first candle
+        WARMUP_CANDLES = 200
+        tf_ms = {"1m": 60000, "5m": 300000, "15m": 900000, "1h": 3600000, "4h": 14400000, "1d": 86400000}
+        warmup_ms = WARMUP_CANDLES * tf_ms.get(timeframe, 3600000)
+        warmup_start = (start_ts - warmup_ms) if start_ts else None
+
         # Use preloaded candles if available (avoids repeated DB calls)
         cache_key = f"{asset}_{timeframe}"
         if cache_key in self.preloaded_candles:
             candles_df = self.preloaded_candles[cache_key]
-            # Apply date filters if needed
-            if start_ts is not None:
-                candles_df = candles_df[candles_df["timestamp"] >= start_ts]
+            # Include warmup period before window start
+            if warmup_start is not None:
+                candles_df = candles_df[candles_df["timestamp"] >= warmup_start]
             if end_ts is not None:
                 candles_df = candles_df[candles_df["timestamp"] <= end_ts]
         else:
-            # Load candle data from database
+            # Load candle data from database (with warmup lookback)
             candles_df = self.loader.load_candles(
                 asset=asset,
                 timeframe=timeframe,
-                start_ts=start_ts,
+                start_ts=warmup_start,
                 end_ts=end_ts,
                 with_indicators=True,
             )
@@ -645,8 +652,17 @@ class LocalBacktestEngine:
 
         n_candles = len(candles_df)
 
+        # Find where the actual window starts (after warmup lookback)
+        # Only open new trades after start_ts; warmup candles are for indicator context only
+        trade_start_idx = config.min_candles_warmup  # Default: skip indicator warmup
+        if start_ts is not None:
+            for idx in range(len(timestamp_arr)):
+                if int(timestamp_arr[idx]) >= start_ts:
+                    trade_start_idx = max(trade_start_idx, idx)
+                    break
+
         # Iterate through candles (skip warmup period)
-        for i in range(config.min_candles_warmup, n_candles):
+        for i in range(trade_start_idx, n_candles):
             close_price = float(close_arr[i])
             timestamp = int(timestamp_arr[i])
 
@@ -756,7 +772,7 @@ class LocalBacktestEngine:
             if not entry_conditions:
                 continue
 
-            result = evaluate_conditions(entry_conditions, indicators)
+            result = evaluate_conditions(entry_conditions, indicators, match_threshold=0.6)
 
             if result.matched and result.confidence > best_confidence:
                 best_confidence = result.confidence
@@ -945,7 +961,7 @@ class LocalBacktestEngine:
                     "timeout_bars",  # New format
                 ]
                 if exit_conditions and not any(k in exit_conditions for k in param_keys):
-                    result = evaluate_conditions(exit_conditions, indicators)
+                    result = evaluate_conditions(exit_conditions, indicators, match_threshold=0.6)
                     if result.matched:
                         return True, "condition"
 

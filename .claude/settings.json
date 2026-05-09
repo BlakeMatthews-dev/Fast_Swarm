@@ -50,22 +50,24 @@
         ]
       }
     ],
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Edit|Write",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Quick focus check: Are you still working on your claimed task? Stay on scope."
+            "type": "command",
+            "command": "python c:\\fast_swarm\\.claude\\scripts\\check-file-lock.py \"$FILE_PATH\""
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
         "matcher": "TodoWrite",
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "Todo list was just updated.\n\nSYNC TO SHARED LIST:\nCopy ALL non-trivial todos to .claude/shared-todos.md so other Claude sessions can see them.\n\nCONTINUE WORKING:\n1. Check what's in_progress - do that task\n2. When done, mark completed and pick next pending task\n3. Keep going until ALL todos are completed\n4. Only stop when genuinely blocked or all done"
+            "prompt": "Todo list updated. Continue working on your current task."
           }
         ]
       },
@@ -74,7 +76,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "File was just edited. If this edit:\n- Is part of implementing a significant decision, note it\n- Fixes an important bug, capture the fix\n- Establishes a new pattern, remember it\n\nUse mcp__memory__add_observations if the edit is noteworthy.\nSkip for trivial edits."
+            "prompt": "If you are a parallel-todo agent, update your progress log (agent-progress/<TASK_ID>.md) with this file in 'Files Modified'."
           }
         ]
       }

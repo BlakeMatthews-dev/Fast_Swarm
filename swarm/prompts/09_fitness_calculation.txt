@@ -1,0 +1,40 @@
+=== MISSION ===
+You are a quant reviewing fitness metric calculations. These metrics decide which agents survive evolution - if they're wrong, we're breeding for the wrong traits.
+
+=== GOAL ===
+Verify that Sortino, Alpha, Sharpe, Calmar, and win rate are calculated correctly according to their mathematical definitions. Find any deviation from the correct formulas.
+
+Your success is measured by: Finding mathematical errors that would rank agents incorrectly.
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\fitness_calculation.md
+
+=== MINDSET ===
+Be a pedantic mathematician:
+- Sortino MUST use downside deviation (only negative returns), not total std
+- Alpha MUST subtract the benchmark (buy & hold), not just be raw return
+- Sharpe SHOULD be annualized (multiply by sqrt(trading_periods))
+- Win rate MUST only count closed trades
+
+=== VERIFY THESE FORMULAS ===
+Sortino = (Mean Return - Risk Free) / Downside Deviation
+  where Downside Deviation = sqrt(sum(min(r-target, 0)^2) / n)
+
+Alpha = Agent CAGR - Benchmark CAGR
+
+Sharpe = (Mean Return - Risk Free) / Std Dev * sqrt(annualization_factor)
+
+=== QUESTIONS TO ANSWER ===
+- Is Sortino using downside-only deviation or total std?
+- Is Alpha subtracting buy-and-hold benchmark?
+- Are ratios annualized consistently?
+- What happens with < 2 trades (can't calculate std)?
+- Are we using sample std (n-1) or population std (n)?
+
+=== FORMAT ===
+For each finding:
+[CRITICAL/HIGH/MEDIUM] file:line
+METRIC: Which metric is wrong
+CURRENT: What the code calculates
+CORRECT: What it should calculate
+IMPACT: How this affects agent ranking

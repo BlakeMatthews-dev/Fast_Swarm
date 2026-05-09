@@ -1,4 +1,5 @@
 import traceback
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.exc import DataError, IntegrityError, OperationalError
@@ -101,26 +102,35 @@ async def fetch_indicators_batch(
             seen.add(key)
             unique_lookups.append(key)
 
-    # Individual point lookups are fast (~2ms each) on TimescaleDB indexes
-    for symbol, ts_seconds in unique_lookups:
-        result = await session.execute(
-            text("""
-                SELECT
-                    rsi_14, macd_line, macd_signal, atr_14, adx_14,
-                    bb_upper, bb_lower, stoch_k, stoch_d, cci_14,
-                    obv, supertrend, supertrend_direction, regime
-                FROM enhanced_candles
-                WHERE symbol = :symbol
-                AND time = to_timestamp(:ts)
-                AND timeframe = :timeframe
-                LIMIT 1
-            """),
-            {"symbol": symbol, "ts": ts_seconds, "timeframe": timeframe},
-        )
-        row = result.fetchone()
+    # Batch lookup: one query for all (symbol, timestamp) pairs
+    if not unique_lookups:
+        return indicators
 
-        if row and row.rsi_14 is not None:
-            indicators[(symbol, ts_seconds)] = {
+    # Build VALUES list for batch query
+    symbols = [s for s, _ in unique_lookups]
+    timestamps = [t for _, t in unique_lookups]
+
+    result = await session.execute(
+        text("""
+            SELECT
+                symbol,
+                EXTRACT(EPOCH FROM time) as ts_seconds,
+                rsi_14, macd_line, macd_signal, atr_14, adx_14,
+                bb_upper, bb_lower, stoch_k, stoch_d, cci_14,
+                obv, supertrend, supertrend_direction, regime
+            FROM enhanced_candles
+            WHERE timeframe = :timeframe
+            AND (symbol, time) IN (
+                SELECT s, to_timestamp(t)
+                FROM UNNEST(:symbols::text[], :timestamps::float8[]) AS u(s, t)
+            )
+        """),
+        {"timeframe": timeframe, "symbols": symbols, "timestamps": timestamps},
+    )
+
+    for row in result.fetchall():
+        if row.rsi_14 is not None:
+            indicators[(row.symbol, row.ts_seconds)] = {
                 "rsi_14": row.rsi_14,
                 "macd_line": row.macd_line,
                 "macd_signal": row.macd_signal,
@@ -273,20 +283,20 @@ async def persist_backtest_trades(
                     # Timestamps
                     entry_timestamp=record.entry_timestamp,
                     exit_timestamp=record.exit_timestamp,
-                    # Prices
-                    entry_price=record.entry_price,
-                    exit_price=record.exit_price,
+                    # Prices — explicit Decimal conversion for NUMERIC(18,8) columns
+                    entry_price=Decimal(str(record.entry_price)) if record.entry_price is not None else None,
+                    exit_price=Decimal(str(record.exit_price)) if record.exit_price is not None else None,
                     # Position sizing - convert percent to USD estimate
-                    position_size_usd=record.position_size_pct * 100 if record.position_size_pct else 0,
+                    position_size_usd=Decimal(str(record.position_size_pct * 100)) if record.position_size_pct else Decimal("0"),
                     # PnL - TradeRecord has net pnl_pct (costs already applied)
                     gross_pnl_pct=None,  # Not tracked separately in TradeRecord
-                    net_pnl_pct=record.pnl_pct,
+                    net_pnl_pct=Decimal(str(record.pnl_pct)) if record.pnl_pct is not None else None,
                     is_winner=(record.pnl_pct > 0) if record.pnl_pct is not None else None,
                     # MFE/MAE
                     mfe_pct=record.mfe_pct,
                     mae_pct=record.mae_pct,
-                    mfe_price=getattr(record, "mfe_price", None),
-                    mae_price=getattr(record, "mae_price", None),
+                    mfe_price=Decimal(str(v)) if (v := getattr(record, "mfe_price", None)) is not None else None,
+                    mae_price=Decimal(str(v)) if (v := getattr(record, "mae_price", None)) is not None else None,
                     # Decision zone tracking
                     entry_confidence=getattr(record, "entry_confidence", None),
                     decision_zone=getattr(record, "decision_zone", None),
@@ -327,42 +337,9 @@ async def persist_backtest_trades(
                 failed += 1
                 continue
 
-        # Add all valid trades from batch
-        for trade in batch_trades:
-            session.add(trade)
-            persisted += 1
-
-        # Flush after each batch with error handling
-        try:
-            await session.flush()
-        except IntegrityError as e:
-            # Duplicate key or constraint violation
-            print(f"[Trade Persist] INTEGRITY ERROR in batch {i // batch_size + 1}: {e.orig}")
-            print(f"[Trade Persist] Rolling back batch. Affected trades: {[t.trade_id for t in batch_trades]}")
-            await session.rollback()
-            failed += len(batch_trades)
-            persisted -= len(batch_trades)
-        except DataError as e:
-            # Invalid data type or value
-            print(f"[Trade Persist] DATA ERROR in batch {i // batch_size + 1}: {e.orig}")
-            print(f"[Trade Persist] Check numeric precision. Affected agent: {agent_id}")
-            await session.rollback()
-            failed += len(batch_trades)
-            persisted -= len(batch_trades)
-        except OperationalError as e:
-            # Database connection or operational issue
-            print(f"[Trade Persist] DATABASE ERROR in batch {i // batch_size + 1}: {e.orig}")
-            print("[Trade Persist] Database may be unavailable. Stack trace:")
-            traceback.print_exc()
-            await session.rollback()
-            failed += len(batch_trades)
-            persisted -= len(batch_trades)
-        except Exception as e:
-            print(f"[Trade Persist] UNEXPECTED ERROR in batch {i // batch_size + 1}: {type(e).__name__}: {e}")
-            traceback.print_exc()
-            await session.rollback()
-            failed += len(batch_trades)
-            persisted -= len(batch_trades)
+        # Batch add all valid trades
+        session.add_all(batch_trades)
+        persisted += len(batch_trades)
 
     # Commit the transaction to persist trades
     try:

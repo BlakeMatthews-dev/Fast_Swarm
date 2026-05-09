@@ -592,6 +592,7 @@ class AgentBacktestService:
                 agent.annualized_roi_pct = metrics.get("annualized_roi_pct", 0.0)
                 agent.win_rate = metrics.get("win_rate")
                 agent.total_trades = metrics.get("total_trades", 0)
+                agent.winning_trades = metrics.get("winning_trades", 0)
                 agent.total_pnl = metrics.get("total_pnl", 0.0)
                 agent.fitness_by_regime = fitness_by_regime  # Store per-regime breakdown
                 agent.fitness_matrix = fitness_matrix  # Store 2D matrix for heatmap

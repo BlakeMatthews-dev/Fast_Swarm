@@ -6,9 +6,7 @@ Agents are spawned with traits, patterns, philosophy, and naming.
 """
 
 import pytest
-
 from Fast_Swarm.Agents.Services.spawn_service import (
-    ALL_22_TRAITS,
     MAX_SPAWN_COUNT,
     SpawnConfig,
     generate_agent_name,
@@ -20,6 +18,7 @@ from Fast_Swarm.Agents.Services.spawn_service import (
     spawn_clone,
     validate_spawn_count,
 )
+from Fast_Swarm.Agents.Services.trait_service import ALL_22_TRAITS
 
 # ============================================================================
 # Test Data Helpers
@@ -367,10 +366,9 @@ class TestSpawnDatabase:
     @pytest.mark.asyncio
     async def test_spawn_persists_to_db(self, db_session):
         """CONTRACT: Spawned agents are saved to database."""
-        from sqlmodel import select
-
         from Fast_Swarm.Agents.Models.agent_models import Agent
         from Fast_Swarm.Agents.Services.spawn_service import spawn_and_persist
+        from sqlmodel import select
 
         # Spawn and persist agents
         agent_ids = await spawn_and_persist(db_session, count=3, seed=42)
@@ -385,10 +383,9 @@ class TestSpawnDatabase:
     @pytest.mark.asyncio
     async def test_spawn_retrievable_after_commit(self, db_session):
         """CONTRACT: Spawned agent retrievable immediately after."""
-        from sqlmodel import select
-
         from Fast_Swarm.Agents.Models.agent_models import Agent
         from Fast_Swarm.Agents.Services.spawn_service import spawn_and_persist
+        from sqlmodel import select
 
         # Spawn single agent
         agent_ids = await spawn_and_persist(db_session, count=1, seed=123)

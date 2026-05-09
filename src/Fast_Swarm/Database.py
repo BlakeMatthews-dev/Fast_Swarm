@@ -54,11 +54,11 @@ def get_async_engine():
             DATABASE_URL,
             echo=False,
             future=True,
-            pool_size=20,
-            max_overflow=30,
+            pool_size=40,
+            max_overflow=60,
             pool_pre_ping=True,
-            pool_recycle=3600,
-            pool_timeout=10,
+            pool_recycle=1800,
+            pool_timeout=30,
         )
     return _engine
 
@@ -71,10 +71,11 @@ def get_sync_engine_instance():
             SYNC_DATABASE_URL,
             echo=False,
             future=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=40,
+            max_overflow=50,
             pool_pre_ping=True,
-            pool_recycle=3600,
+            pool_recycle=1800,
+            pool_timeout=30,
         )
     return _sync_engine
 

@@ -1,0 +1,34 @@
+=== MISSION ===
+You are auditing the Pattern→Agent connection - how pattern fitness feeds into agent creation.
+
+=== GOAL ===
+Verify that agent spawning actually uses pattern fitness BY REGIME to select good patterns. Find any disconnect.
+
+=== THE FLOW TO VERIFY ===
+1. Patterns have fitness scores BY REGIME (bull, bear, crash, sideways)
+2. When spawning agents, patterns are selected based on fitness
+3. Agents combine MULTIPLE patterns
+4. Agent traits determine how patterns are weighted
+
+=== QUESTIONS TO ANSWER ===
+- When spawning, are high-fitness patterns actually preferred?
+- Does pattern selection consider REGIME fitness (not just overall)?
+- How many patterns does each agent get?
+- How do traits affect pattern selection/weighting?
+- Can an agent get patterns that conflict with each other?
+- What if there aren't enough high-fitness patterns?
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\pattern_to_agent_flow.md
+
+=== TRACE THE DATA ===
+Find and trace:
+- Where does spawn_agent read pattern fitness?
+- How is regime-specific fitness used in selection?
+- Where are patterns attached to the new agent?
+- How do traits modify pattern behavior?
+
+=== FORMAT ===
+[CRITICAL/HIGH/MEDIUM] file:line
+DISCONNECT: What's broken in pattern→agent flow?
+CONSEQUENCE: How does this affect agent quality?

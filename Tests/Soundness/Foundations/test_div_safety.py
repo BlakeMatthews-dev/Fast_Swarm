@@ -24,7 +24,7 @@ import sys
 
 import pytest
 
-from Agents.Services.fitness_service import (
+from Fast_Swarm.Agents.Services.fitness_service import (
     TradeData,
     calculate_ev,
     calculate_ev_multiplier,

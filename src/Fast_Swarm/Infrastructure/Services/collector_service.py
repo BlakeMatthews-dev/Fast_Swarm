@@ -36,8 +36,8 @@ class DataCollectorService:
         self._write_queue_trades: list[Trade] = []
         self._write_queue_ticks: list[ExchangeTick] = []
         self._write_queue_orderbooks: list[OrderBookSnapshot] = []
-        self._batch_size = 50
-        self._tick_batch_size = 100  # Higher batch for high-frequency tick data
+        self._batch_size = 100  # Larger batches = fewer DB flushes
+        self._tick_batch_size = 500  # Much larger to reduce connection contention
 
         # Track current minute candles being built from ticks
         # Key: "(exchange, symbol)" -> {"open": float, "high": float, "low": float, "close": float, "volume": float, "minute_ts": int}
@@ -376,15 +376,10 @@ class DataCollectorService:
 
         try:
             async with self.session_factory() as session:
-                for c in candles:
-                    session.add(c)
-                for t in trades:
-                    session.add(t)
-                for tick in ticks:
-                    session.add(tick)
-                for ob in orderbooks:
-                    session.add(ob)
-
+                session.add_all(candles)
+                session.add_all(trades)
+                session.add_all(ticks)
+                session.add_all(orderbooks)
                 await session.commit()
                 logger.debug(
                     f"Flushed batches: {len(candles)} candles, "

@@ -98,8 +98,12 @@ class CryptoComRESTClient:
         # Build signature payload
         sig_payload = f"{method}{self._request_id}{self.api_key}{param_string}{nonce}"
 
-        # Create HMAC-SHA256 signature
-        signature = hmac.new(
+        # Create HMAC-SHA256 signature for API request authentication
+        # Note: This is HMAC for message signing, NOT password hashing.
+        # HMAC-SHA256 is the industry standard for API authentication (used by AWS, Stripe, all exchanges).
+        # CodeQL py/weak-sensitive-data-hashing is a false positive here - api_secret is a
+        # pre-shared signing key, not a password being stored.
+        signature = hmac.new(  # noqa: S324
             self.api_secret.encode("utf-8"),
             sig_payload.encode("utf-8"),
             hashlib.sha256,
@@ -250,16 +254,14 @@ class CryptoComRESTClient:
             if quantity == 0:
                 continue
 
-            positions.append(
-                {
-                    "symbol": pos.get("instrument_name"),
-                    "side": "long" if quantity > 0 else "short",
-                    "size": abs(quantity),
-                    "entry_price": float(pos.get("avg_price", 0)),
-                    "unrealized_pnl": float(pos.get("open_position_pnl", 0)),
-                    "cost": float(pos.get("cost", 0)),
-                }
-            )
+            positions.append({
+                "symbol": pos.get("instrument_name"),
+                "side": "long" if quantity > 0 else "short",
+                "size": abs(quantity),
+                "entry_price": float(pos.get("avg_price", 0)),
+                "unrealized_pnl": float(pos.get("open_position_pnl", 0)),
+                "cost": float(pos.get("cost", 0)),
+            })
 
         return positions
 
@@ -477,18 +479,16 @@ class CryptoComRESTClient:
 
         orders = []
         for order in result.get("data", []):
-            orders.append(
-                {
-                    "order_id": order.get("order_id"),
-                    "symbol": order.get("instrument_name"),
-                    "side": order.get("side", "").lower(),
-                    "type": order.get("type", "").lower(),
-                    "size": float(order.get("quantity", 0)),
-                    "price": float(order.get("price", 0)) if order.get("price") else None,
-                    "filled_size": float(order.get("cumulative_quantity", 0)),
-                    "status": order.get("status"),
-                }
-            )
+            orders.append({
+                "order_id": order.get("order_id"),
+                "symbol": order.get("instrument_name"),
+                "side": order.get("side", "").lower(),
+                "type": order.get("type", "").lower(),
+                "size": float(order.get("quantity", 0)),
+                "price": float(order.get("price", 0)) if order.get("price") else None,
+                "filled_size": float(order.get("cumulative_quantity", 0)),
+                "status": order.get("status"),
+            })
 
         return orders
 
@@ -572,21 +572,36 @@ def create_cryptocom_client(
     use_sandbox: bool = False,
 ) -> CryptoComRESTClient:
     """
-    Create a crypto.com REST client.
+    Create an exchange REST client.
 
-    If credentials not provided, attempts to load from environment variables:
-    - CRYPTOCOM_API_KEY
-    - CRYPTOCOM_API_SECRET
+    Returns a ccxt-backed unified client when EXCHANGE_BACKEND=ccxt,
+    otherwise returns the native CryptoComRESTClient.
+
+    Credentials from environment:
+    - CRYPTOCOM_API_KEY / EXCHANGE_API_KEY
+    - CRYPTOCOM_API_SECRET / EXCHANGE_API_SECRET
+    - EXCHANGE_ID (default: cryptocom, only used with ccxt backend)
 
     Args:
         api_key: Optional API key
         api_secret: Optional API secret
-        use_sandbox: Use UAT sandbox environment
+        use_sandbox: Use sandbox/testnet environment
 
     Returns:
-        Configured CryptoComRESTClient instance
+        Exchange client (native or ccxt, same interface)
     """
     import os
+
+    backend = os.environ.get("EXCHANGE_BACKEND", "native").lower()
+
+    if backend == "ccxt":
+        from Fast_Swarm.exchanges.ccxt_client import create_exchange_client
+
+        return create_exchange_client(
+            api_key=api_key,
+            api_secret=api_secret,
+            use_sandbox=use_sandbox,
+        )
 
     key = api_key or os.environ.get("CRYPTOCOM_API_KEY", "")
     secret = api_secret or os.environ.get("CRYPTOCOM_API_SECRET", "")

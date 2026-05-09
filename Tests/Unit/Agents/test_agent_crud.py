@@ -6,7 +6,6 @@ Source of truth: Master_plan.md, EDD rules, domain logic.
 """
 
 import pytest
-
 from Fast_Swarm.Agents.Services.agent_crud import (
     REQUIRED_TRAITS,
     bulk_create_agents,

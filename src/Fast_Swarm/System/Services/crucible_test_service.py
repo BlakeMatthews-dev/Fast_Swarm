@@ -88,14 +88,24 @@ class CrucibleTestService:
                 generation=0,  # Snapshot is generation 0 / frozen
             )
 
-            # 4. Run Backtest on ALL assets
-            all_trades = engine.run(
-                agent=agent_record,
-                dataset={
-                    "assets": assets,
-                    "timeframe": "1h",
-                },
-            )
+            # 4. Run Backtest on ALL assets, ALL timeframes, RECENT data only (OOS gauntlet)
+            # Crucible tests generalization: multi-timeframe on recent 6-month data
+            from datetime import timedelta
+
+            oos_cutoff = datetime.utcnow() - timedelta(days=180)
+            crucible_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
+
+            all_trades = []
+            for tf in crucible_timeframes:
+                tf_trades = engine.run(
+                    agent=agent_record,
+                    dataset={
+                        "assets": assets,
+                        "timeframe": tf,
+                        "start_ts": int(oos_cutoff.timestamp() * 1000),
+                    },
+                )
+                all_trades.extend(tf_trades)
 
             # 5. Calculate Metrics and Regime Scores
             # Scored on overall fitness + every regime type (bull, bear, chop, lowvol)
@@ -130,6 +140,28 @@ class CrucibleTestService:
             except Exception as e:
                 print(f"[Crucible] Wisdom generation failed for entry {entry_id}: {e}")
 
+            # 8. AUTO-GRADUATE: Start paper trading if fitness exceeds threshold
+            GRADUATION_THRESHOLD = 40.0  # Minimum Crucible fitness to paper trade
+            paper_trading_started = False
+            if entry.overall_fitness and entry.overall_fitness >= GRADUATION_THRESHOLD:
+                try:
+                    from ...Trading.Services.agent_paper_trading_service import AgentPaperTradingService
+
+                    paper_service = AgentPaperTradingService()
+                    paper_result = await paper_service.start_paper_trading(
+                        session=session,
+                        agent_id=entry.agent_id,
+                        symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+                        initial_balance=50000.0,
+                    )
+                    paper_trading_started = "error" not in paper_result
+                    if paper_trading_started:
+                        print(f"[Crucible] GRADUATED: Agent {entry.agent_id} → paper trading (fitness={entry.overall_fitness:.1f})")
+                    else:
+                        print(f"[Crucible] Paper trading start failed: {paper_result}")
+                except Exception as pt_err:
+                    print(f"[Crucible] Paper trading graduation failed: {pt_err}")
+
             return {
                 "entry_id": entry_id,
                 "status": "completed",
@@ -137,6 +169,7 @@ class CrucibleTestService:
                 "regime_scores": entry.regime_scores,
                 "total_trades": len(all_trades),
                 "wisdom_id": wisdom_id,
+                "graduated_to_paper": paper_trading_started,
             }
 
         except Exception as e:

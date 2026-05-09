@@ -3,10 +3,9 @@
 
 import asyncio
 
-from sqlmodel import select
-
 from Fast_Swarm.Database import async_session_maker
 from Fast_Swarm.Patterns.Models.pattern_models import Pattern
+from sqlmodel import select
 
 
 async def main():

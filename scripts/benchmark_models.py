@@ -160,7 +160,7 @@ async def wait_for_vllm(timeout: int = 120) -> bool:
                 resp = await client.get(f"{VLLM_URL}/v1/models", timeout=5.0)
                 if resp.status_code == 200:
                     return True
-            except Exception:
+            except:
                 pass
             await asyncio.sleep(2)
     return False

@@ -1,0 +1,70 @@
+=== MISSION ===
+You are auditing the COMPLETE MVP FLOW end-to-end. This is the most important audit.
+
+=== GOAL ===
+Trace data from chaos discovery all the way to trading decisions. Find EVERY break in the pipeline. One broken link = entire system fails.
+
+=== THE COMPLETE FLOW ===
+
+STAGE 1: CHAOS → PATTERNS
+- Chaotic market data is analyzed
+- Patterns emerge with conditions
+- Patterns are stored
+
+STAGE 2: PATTERNS → FITNESS
+- Patterns are backtested
+- Trades are generated
+- Fitness calculated BY REGIME (bull/bear/crash/sideways)
+
+STAGE 3: FITNESS → AGENTS
+- Pattern fitness feeds agent spawning
+- Agents combine multiple patterns
+- Traits determine pattern weighting
+
+STAGE 4: AGENTS → BACKTESTING
+- Agents trade on historical windows
+- Uncertain decisions → LLM consultation
+- Trades generate agent fitness
+
+STAGE 5: FITNESS → EVOLUTION
+- Agents ranked by fitness
+- Bottom culled, top breed
+- Offspring inherit + mutate
+
+STAGE 6: EVOLUTION → CRUCIBLE
+- Leveled-up agents enter Crucible
+- Trade each asset sequentially
+- Report stats + final balance
+
+STAGE 7: CRUCIBLE → PAPER TRADING
+- Crucible graduates paper trade
+
+STAGE 8: PAPER → LIVE
+- Proven paper traders go live
+
+=== OUTPUT REQUIREMENT ===
+Write your complete analysis to: c:\fast_swarm\swarm\botresearch\full_mvp_flow.md
+
+=== FOR EACH STAGE VERIFY ===
+1. Does data flow IN correctly?
+2. Is transformation correct?
+3. Does data flow OUT to next stage?
+4. What happens on error?
+
+=== FIND THESE BREAKS ===
+- Data that's calculated but never used
+- Stages that could run out of order
+- Missing error handling between stages
+- State that could become inconsistent
+- Stages that skip their prerequisites
+
+=== FORMAT ===
+## Stage X: [Name]
+INPUT: What data enters
+PROCESS: What happens
+OUTPUT: What data exits
+STATUS: [WORKING/BROKEN/PARTIAL]
+ISSUES: List any problems found
+
+## Flow Breaks
+[CRITICAL] Between stage X and Y: description

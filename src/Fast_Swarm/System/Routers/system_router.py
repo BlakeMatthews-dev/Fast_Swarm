@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...Database import get_session
 from ..Models.crucible_models import CrucibleEntry, Wisdom
 from ..Services.crucible_entry_service import CrucibleEntryService
+from ..Services.crucible_test_service import CrucibleTestService
 from ..Services.orchestrator import get_orchestrator
 from ..Services.wisdom_service import WisdomTransferService
 
@@ -18,6 +19,7 @@ router = APIRouter(prefix="/system", tags=["System"])
 # For simplicity with the existing structure, we can use the global instances where applicable
 # or create new ones for stateless logic.
 crucible_service = CrucibleEntryService()
+crucible_test_service = CrucibleTestService()
 wisdom_service = WisdomTransferService()
 
 
@@ -25,6 +27,46 @@ wisdom_service = WisdomTransferService()
 async def check_agent_for_crucible(agent_id: str, session: AsyncSession = Depends(get_session)):
     """Check if an agent is eligible for the Crucible and create an entry if so."""
     return await crucible_service.check_and_create_entry(session, agent_id)
+
+
+@router.post("/crucible/run/{entry_id}", tags=["Crucible"])
+async def run_crucible_test(entry_id: int, session: AsyncSession = Depends(get_session)):
+    """
+    Run the Crucible walk-forward validation test for a pending entry.
+
+    Tests the agent snapshot on all assets with $50k paper money,
+    scoring overall fitness and per-regime performance.
+    """
+    return await crucible_test_service.run_crucible_test(session, entry_id)
+
+
+@router.post("/crucible/run-pending", tags=["Crucible"])
+async def run_all_pending_crucible_tests(session: AsyncSession = Depends(get_session)):
+    """
+    Run Crucible tests for all pending entries.
+
+    Called automatically after evolution creates new entries,
+    or manually to process any backlog.
+    """
+    from sqlmodel import select as sel
+
+    result = await session.exec(
+        sel(CrucibleEntry).where(CrucibleEntry.status == "pending")
+    )
+    pending = result.all()
+
+    if not pending:
+        return {"message": "No pending crucible entries", "tested": 0}
+
+    results = []
+    for entry in pending:
+        test_result = await crucible_test_service.run_crucible_test(session, entry.id)
+        results.append(test_result)
+
+    return {
+        "tested": len(results),
+        "results": results,
+    }
 
 
 @router.get("/wisdom/latest", response_model=list[Wisdom])
@@ -166,7 +208,7 @@ async def get_crucible_leaderboard(
             ORDER BY ce.overall_fitness DESC
             LIMIT :limit
         """),
-        {"limit": limit},
+        {"limit": limit}
     )
     rows = result.fetchall()
 
@@ -441,7 +483,6 @@ async def event_stream():
             console.log(data.type, data.data);
         };
     """
-
     async def generate():
         import math
 
@@ -486,7 +527,7 @@ async def event_stream():
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
-        },
+        }
     )
 
 
@@ -594,4 +635,7 @@ async def prometheus_metrics(session: AsyncSession = Depends(get_session)):
     metrics_lines.append("# TYPE backtest_trades_winning counter")
     metrics_lines.append(f"backtest_trades_winning {trade_row[1] if trade_row else 0}")
 
-    return Response(content="\n".join(metrics_lines) + "\n", media_type="text/plain; version=0.0.4; charset=utf-8")
+    return Response(
+        content="\n".join(metrics_lines) + "\n",
+        media_type="text/plain; version=0.0.4; charset=utf-8"
+    )

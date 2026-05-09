@@ -57,7 +57,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
     async with async_session_maker() as session, session.begin():
         yield session
-        # Rollback happens automatically when context exits
+            # Rollback happens automatically when context exits
 
     await engine.dispose()
 

@@ -14,6 +14,11 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+from Fast_Swarm.Metrics.metrics_engine import (
+    calculate_sortino as _qs_sortino,
+    calculate_max_drawdown as _qs_max_drawdown,
+)
+
 # =============================================================================
 # Data Classes for Fitness Calculation
 # =============================================================================
@@ -133,7 +138,8 @@ def calculate_ev_multiplier(ev: float) -> float:
 
         if ev_low <= ev <= ev_high:
             # Linear interpolation
-            ratio = (ev - ev_low) / (ev_high - ev_low)
+            denominator = ev_high - ev_low
+            ratio = (ev - ev_low) / denominator if denominator != 0 else 0.5
             return mult_low + ratio * (mult_high - mult_low)
 
     # Fallback (shouldn't reach here)
@@ -358,30 +364,21 @@ def calculate_sortino(trades: list[TradeData]) -> float:
     if len(pnls) < 2:
         return 0.0
 
-    mean_return = sum(pnls) / len(pnls)
+    # Delegate to QuantStats-backed Metrics engine for correct
+    # downside deviation (proper denominator + annualization)
+    returns = [p / 100.0 for p in pnls]
+    sortino = _qs_sortino(returns)
 
-    # Downside deviation (only negative returns)
-    negative_returns = [p for p in pnls if p < 0]
-
-    if not negative_returns:
-        # No losses = infinite Sortino, cap at 4
-        return 4.0
-
-    sum_squared = sum(p**2 for p in negative_returns)
-    downside_dev = math.sqrt(sum_squared / len(pnls))
-
-    if downside_dev == 0:
-        return 4.0 if mean_return > 0 else 0.0
-
-    sortino = mean_return / downside_dev
-
-    # Bound to reasonable range
+    # Bound to the range this service expects (components score against 0-4)
     return max(0, min(4, sortino))
 
 
 def calculate_max_drawdown(trades: list[TradeData]) -> float:
     """
     Calculate maximum drawdown from trades.
+
+    Delegates to QuantStats-backed Metrics engine for correct
+    peak-to-trough calculation.
 
     Args:
         trades: List of trade data
@@ -397,18 +394,11 @@ def calculate_max_drawdown(trades: list[TradeData]) -> float:
     if not pnls:
         return 0.0
 
-    # Build equity curve
-    equity = 100.0  # Start at 100
-    peak = equity
-    max_dd = 0.0
-
-    for pnl_pct in pnls:
-        equity *= 1 + pnl_pct / 100
-        peak = max(peak, equity)
-        dd = (peak - equity) / peak * 100 if peak > 0 else 0
-        max_dd = max(max_dd, dd)
-
-    return min(100, max_dd)
+    # Convert pnl_pct to decimal returns for the Metrics engine
+    returns = [p / 100.0 for p in pnls]
+    # _qs_max_drawdown returns a decimal (0.15 = 15%), convert to percentage
+    dd = _qs_max_drawdown(returns)
+    return min(100, dd * 100)
 
 
 # =============================================================================
@@ -416,13 +406,44 @@ def calculate_max_drawdown(trades: list[TradeData]) -> float:
 # =============================================================================
 
 
+def _derive_exit_efficiency(trades: list[TradeData]) -> float:
+    """Derive exit efficiency from trade data. Measures how much upside the agent captures."""
+    wins = [t.pnl_pct for t in trades if t.is_win and _is_valid_number(t.pnl_pct)]
+    losses = [abs(t.pnl_pct) for t in trades if not t.is_win and _is_valid_number(t.pnl_pct)]
+    if not wins or not losses:
+        return 0.5  # Neutral default
+    avg_win = sum(wins) / len(wins)
+    avg_loss = sum(losses) / len(losses)
+    # Ratio of avg win to total move magnitude — higher = better exits
+    return min(1.0, avg_win / (avg_win + avg_loss)) if (avg_win + avg_loss) > 0 else 0.5
+
+
+def _derive_loss_sizing(trades: list[TradeData]) -> float:
+    """Derive loss sizing quality from trade data. Measures if losses are controlled."""
+    losses = [abs(t.pnl_pct) for t in trades if not t.is_win and _is_valid_number(t.pnl_pct)]
+    wins = [t.pnl_pct for t in trades if t.is_win and _is_valid_number(t.pnl_pct)]
+    if not losses or not wins:
+        return 1.0  # Neutral
+    avg_loss = sum(losses) / len(losses)
+    avg_win = sum(wins) / len(wins)
+    # Reward/risk ratio — higher means losses are well-controlled relative to wins
+    return min(3.0, avg_win / avg_loss) if avg_loss > 0 else 2.0
+
+
+def _derive_ai_accuracy(trades: list[TradeData]) -> float:
+    """Derive prediction accuracy from trade data. Uses win rate as proxy."""
+    if not trades:
+        return 0.5
+    return sum(1 for t in trades if t.is_win) / len(trades)
+
+
 def calculate_fitness(
     trades: list[TradeData],
     benchmark_pct: float = 0.0,
     calibration_score: float = 0.5,
-    exit_efficiency: float = 0.55,
-    loss_sizing: float = 1.25,
-    ai_accuracy: float = 0.6,
+    exit_efficiency: float = None,
+    loss_sizing: float = None,
+    ai_accuracy: float = None,
 ) -> FitnessResult:
     """
     Calculate fitness score using the 100-point model.
@@ -447,15 +468,27 @@ def calculate_fitness(
     if not valid_trades:
         return _zero_fitness_result("No valid trades")
 
+    # Auto-derive components from trade data if not explicitly provided
+    if exit_efficiency is None:
+        exit_efficiency = _derive_exit_efficiency(valid_trades)
+    if loss_sizing is None:
+        loss_sizing = _derive_loss_sizing(valid_trades)
+    if ai_accuracy is None:
+        ai_accuracy = _derive_ai_accuracy(valid_trades)
+
     # Calculate EV
     ev = calculate_ev(valid_trades)
 
-    # EV Gate: Block negative expectancy
-    if not ev_gate(ev):
-        return _zero_fitness_result("EV gate failed")
+    # EV Gate: Block negative ALPHA (not raw PnL)
+    # A pattern that loses -2% in a -50% market has +48% alpha — that should pass
+    # Gate on alpha (EV minus benchmark) so strategies are judged vs buy-and-hold
+    alpha_ev = ev - benchmark_pct if benchmark_pct else ev
+    if not ev_gate(alpha_ev):
+        return _zero_fitness_result("EV gate failed (negative alpha)")
 
-    # Calculate EV multiplier
-    ev_multiplier = calculate_ev_multiplier(ev)
+    # Calculate EV multiplier based on alpha (not raw EV)
+    # Strategies that outperform benchmark get amplified
+    ev_multiplier = calculate_ev_multiplier(alpha_ev)
 
     # Calculate metrics
     win_rate = calculate_win_rate(valid_trades)
@@ -613,66 +646,6 @@ def _zero_fitness_result(reason: str) -> FitnessResult:
 
 
 # =============================================================================
-# Simple Calculate Fitness (for backwards compatibility)
-# =============================================================================
-
-
-def simple_calculate_fitness(
-    total_pnl_pct: float,
-    trade_count: int,
-    win_rate: float = 50.0,
-    max_drawdown: float = 10.0,
-    sortino: float = 1.0,
-) -> float:
-    """
-    Simplified fitness calculation from aggregate metrics.
-
-    Used when full trade history isn't available.
-
-    Args:
-        total_pnl_pct: Total PnL percentage
-        trade_count: Number of trades
-        win_rate: Win rate percentage
-        max_drawdown: Max drawdown percentage
-        sortino: Sortino ratio
-
-    Returns:
-        Fitness score [0, 100]
-    """
-    if trade_count == 0:
-        return 0.0
-
-    # EV approximation from total PnL
-    ev = total_pnl_pct / trade_count if trade_count > 0 else 0.0
-
-    # EV Gate
-    if ev <= 0:
-        return 0.0
-
-    # EV Multiplier
-    ev_mult = calculate_ev_multiplier(ev)
-
-    # Components (using defaults for missing data)
-    alpha_component = 0.0  # No benchmark data
-    calibration_component = 0.0  # Baseline
-    win_rate_component = calculate_win_rate_component(win_rate)
-    sortino_component = calculate_sortino_component(sortino)
-    drawdown_component = calculate_drawdown_component(max_drawdown)
-    exit_eff_component = 5.0  # Default middle
-    loss_size_component = 2.5  # Default middle
-    ai_acc_component = 2.5  # Default middle
-
-    raw_score = (
-        alpha_component
-        + calibration_component
-        + win_rate_component
-        + sortino_component
-        + drawdown_component
-        + exit_eff_component
-        + loss_size_component
-        + ai_acc_component
-    )
-
-    weighted_score = raw_score * ev_mult
-
-    return max(0.0, min(100.0, weighted_score))
+# simple_calculate_fitness REMOVED — was dead code with hardcoded EV gate on raw PnL
+# and alpha_component permanently zeroed. Removed to prevent accidental use.
+# Use calculate_fitness() with benchmark_pct instead.

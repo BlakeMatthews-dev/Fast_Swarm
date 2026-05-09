@@ -134,6 +134,11 @@ async def ensure_database() -> bool:
     This is called during FastAPI lifespan startup.
     Returns True if database is ready, raises exception on failure.
     """
+    # When running inside Docker Compose, PostgreSQL is managed externally
+    if os.getenv("SKIP_DOCKER_CHECK", "").lower() in ("1", "true", "yes"):
+        print("[Docker] SKIP_DOCKER_CHECK set — assuming database is managed externally")
+        return True
+
     print("[Docker] Ensuring database is available...")
 
     # Step 1: Check if Docker is running

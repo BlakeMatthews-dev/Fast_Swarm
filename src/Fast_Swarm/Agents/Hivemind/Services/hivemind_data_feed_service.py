@@ -29,6 +29,11 @@ from Fast_Swarm.exchanges.base_ws import (
     NormalizedTrade,
 )
 
+# Import motion derivative service for Bear Protection
+from Fast_Swarm.Infrastructure.Services.motion_derivative_service import (
+    compute_motion_derivatives_from_history,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -223,9 +228,7 @@ def compute_indicators(candles: list[dict]) -> dict[str, float]:
     # Volume SMA
     if len(volumes) >= 20:
         indicators["volume_sma_20"] = sum(volumes[-20:]) / 20
-        indicators["volume_ratio"] = (
-            volumes[-1] / indicators["volume_sma_20"] if indicators["volume_sma_20"] > 0 else 1.0
-        )
+        indicators["volume_ratio"] = volumes[-1] / indicators["volume_sma_20"] if indicators["volume_sma_20"] > 0 else 1.0
 
     # Price change
     if len(closes) >= 2:
@@ -239,6 +242,14 @@ def compute_indicators(candles: list[dict]) -> dict[str, float]:
     if len(closes) >= 240:
         indicators["close_4h_ago"] = closes[-240]
         indicators["change_4h_pct"] = (closes[-1] - closes[-240]) / closes[-240] * 100 if closes[-240] > 0 else 0
+
+    # ADX (Average Directional Index) - needed for Bear Protection motion derivatives
+    if len(candles) >= 15:
+        adx_result = _adx(candles, 14)
+        if adx_result:
+            indicators["adx_14"] = adx_result["adx"]
+            indicators["plus_di"] = adx_result["plus_di"]
+            indicators["minus_di"] = adx_result["minus_di"]
 
     return indicators
 
@@ -266,7 +277,7 @@ def _rsi(closes: list[float], period: int = 14) -> float:
     losses = []
 
     for i in range(1, len(closes)):
-        change = closes[i] - closes[i - 1]
+        change = closes[i] - closes[i-1]
         if change > 0:
             gains.append(change)
             losses.append(0)
@@ -297,7 +308,7 @@ def _std(values: list[float]) -> float:
 
     mean = sum(values) / len(values)
     variance = sum((x - mean) ** 2 for x in values) / len(values)
-    return variance**0.5
+    return variance ** 0.5
 
 
 def _atr(candles: list[dict], period: int = 14) -> float:
@@ -309,14 +320,115 @@ def _atr(candles: list[dict], period: int = 14) -> float:
     for i in range(1, len(candles)):
         high = candles[i]["high"]
         low = candles[i]["low"]
-        prev_close = candles[i - 1]["close"]
+        prev_close = candles[i-1]["close"]
 
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close)
+        )
         true_ranges.append(tr)
 
     # Use recent period
     recent_tr = true_ranges[-period:]
     return sum(recent_tr) / len(recent_tr) if recent_tr else 0.0
+
+
+def _adx(candles: list[dict], period: int = 14) -> dict | None:
+    """
+    Calculate ADX (Average Directional Index) with +DI and -DI.
+
+    ADX measures trend strength (not direction). Values:
+    - 0-20: Weak/no trend
+    - 20-40: Strong trend
+    - 40-60: Very strong trend
+    - 60+: Extremely strong trend
+
+    Returns dict with 'adx', 'plus_di', 'minus_di' or None if insufficient data.
+    """
+    if len(candles) < period + 1:
+        return None
+
+    # Calculate True Range, +DM, -DM
+    true_ranges = []
+    plus_dm = []
+    minus_dm = []
+
+    for i in range(1, len(candles)):
+        high = candles[i]["high"]
+        low = candles[i]["low"]
+        prev_high = candles[i - 1]["high"]
+        prev_low = candles[i - 1]["low"]
+        prev_close = candles[i - 1]["close"]
+
+        # True Range
+        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        true_ranges.append(tr)
+
+        # Directional Movement
+        up_move = high - prev_high
+        down_move = prev_low - low
+
+        if up_move > down_move and up_move > 0:
+            plus_dm.append(up_move)
+        else:
+            plus_dm.append(0)
+
+        if down_move > up_move and down_move > 0:
+            minus_dm.append(down_move)
+        else:
+            minus_dm.append(0)
+
+    if len(true_ranges) < period:
+        return None
+
+    # Smooth using Wilder's smoothing (similar to EMA but different multiplier)
+    def wilder_smooth(values: list[float], period: int) -> list[float]:
+        smoothed = [sum(values[:period])]  # First value is SMA
+        for i in range(period, len(values)):
+            smoothed.append(smoothed[-1] - (smoothed[-1] / period) + values[i])
+        return smoothed
+
+    atr_smoothed = wilder_smooth(true_ranges, period)
+    plus_dm_smoothed = wilder_smooth(plus_dm, period)
+    minus_dm_smoothed = wilder_smooth(minus_dm, period)
+
+    if not atr_smoothed or atr_smoothed[-1] == 0:
+        return None
+
+    # Calculate +DI and -DI
+    plus_di_val = (plus_dm_smoothed[-1] / atr_smoothed[-1]) * 100
+    minus_di_val = (minus_dm_smoothed[-1] / atr_smoothed[-1]) * 100
+
+    # Calculate DX
+    di_sum = plus_di_val + minus_di_val
+    if di_sum == 0:
+        dx_values = [0]
+    else:
+        # Calculate DX for each period
+        dx_values = []
+        for i in range(len(atr_smoothed)):
+            if atr_smoothed[i] > 0:
+                pdi = (plus_dm_smoothed[i] / atr_smoothed[i]) * 100
+                mdi = (minus_dm_smoothed[i] / atr_smoothed[i]) * 100
+                di_sum_i = pdi + mdi
+                if di_sum_i > 0:
+                    dx_values.append(abs(pdi - mdi) / di_sum_i * 100)
+                else:
+                    dx_values.append(0)
+
+    # ADX is smoothed DX
+    if len(dx_values) >= period:
+        adx_smoothed = wilder_smooth(dx_values, period)
+        adx_val = adx_smoothed[-1] if adx_smoothed else 0
+    else:
+        adx_val = sum(dx_values) / len(dx_values) if dx_values else 0
+
+    return {
+        "adx": adx_val,
+        "plus_di": plus_di_val,
+        "minus_di": minus_di_val,
+    }
 
 
 # =============================================================================
@@ -526,11 +638,53 @@ class HivemindDataFeedService:
         self._notify_candle_close(state, candle_dict)
 
     def _update_indicators(self, state: SymbolState):
-        """Recompute indicators from candle history."""
+        """Recompute indicators from candle history, including motion derivatives."""
         candles = list(state.candle_history)
-        if candles:
-            state.indicators = compute_indicators(candles)
-            state.last_indicator_update = int(datetime.utcnow().timestamp())
+        if not candles:
+            return
+
+        # Compute base indicators (now includes ADX)
+        state.indicators = compute_indicators(candles)
+        state.last_indicator_update = int(datetime.utcnow().timestamp())
+
+        # For motion derivatives, we need ADX values in the candle history
+        # Enrich each candle with its ADX value for derivative computation
+        # We compute ADX incrementally for each candle in the history
+        enriched_candles = []
+        for i, candle in enumerate(candles):
+            enriched = candle.copy()
+            # Compute ADX for candles up to this point
+            if i >= 14:
+                history_slice = candles[: i + 1]
+                adx_result = _adx(history_slice, 14)
+                if adx_result:
+                    enriched["adx_14"] = adx_result["adx"]
+            enriched_candles.append(enriched)
+
+        # Compute motion derivatives if we have enough history (24+ candles)
+        # Motion derivatives need: 21 for z-score window + 3 for jerk derivative
+        if len(enriched_candles) >= 24 and enriched_candles[-1].get("adx_14") is not None:
+            try:
+                current_candle = enriched_candles[-1]
+                history = enriched_candles[:-1]
+
+                motion_data = compute_motion_derivatives_from_history(history, current_candle)
+
+                # Merge motion derivatives into indicators
+                for key, value in motion_data.items():
+                    if value is not None:
+                        state.indicators[key] = value
+
+                # Log if defensive trigger fires
+                if motion_data.get("defensive_trigger") == 1:
+                    logger.warning(
+                        "DEFENSIVE TRIGGER (live): %s - acc=%.2f, adx_jerk=%.2f",
+                        state.symbol,
+                        motion_data.get("close_acceleration_zscore", 0),
+                        motion_data.get("adx_14_jerk_zscore", 0),
+                    )
+            except Exception as e:
+                logger.debug("Motion derivative computation failed: %s", e)
 
     def _notify_candle_close(self, state: SymbolState, candle: dict):
         """Notify all callbacks of candle close."""

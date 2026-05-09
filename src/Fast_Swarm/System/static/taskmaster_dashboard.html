@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Taskmaster Dashboard</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .health-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 14px;
+        }
+
+        .health-healthy { background: #10b981; color: #fff; }
+        .health-degraded { background: #f59e0b; color: #000; }
+        .health-critical { background: #ef4444; color: #fff; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 800px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #4ade80;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .component {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid #333;
+        }
+
+        .component:last-child {
+            border-bottom: none;
+        }
+
+        .component-name {
+            font-weight: 500;
+        }
+
+        .component-meta {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-healthy { background: #10b98133; color: #10b981; }
+        .status-degraded { background: #f59e0b33; color: #f59e0b; }
+        .status-stalled { background: #ef444433; color: #ef4444; }
+        .status-failed { background: #ef4444; color: #fff; }
+        .status-unknown { background: #666; color: #fff; }
+
+        .activity-entry {
+            padding: 10px 12px;
+            border-bottom: 1px solid #333;
+            font-size: 14px;
+        }
+
+        .activity-entry:last-child {
+            border-bottom: none;
+        }
+
+        .activity-time {
+            color: #888;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+
+        .activity-component {
+            color: #60a5fa;
+            font-weight: 500;
+        }
+
+        .level-warning { border-left: 3px solid #f59e0b; }
+        .level-error { border-left: 3px solid #ef4444; }
+        .level-critical { border-left: 3px solid #ef4444; background: #ef444422; }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: #3b82f6;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #2563eb;
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        button.danger {
+            background: #ef4444;
+        }
+
+        button.danger:hover {
+            background: #dc2626;
+        }
+
+        .refresh-indicator {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .error-message {
+            background: #ef444433;
+            color: #ef4444;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .no-data {
+            color: #888;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .poke-btn {
+            background: #f59e0b;
+            padding: 4px 10px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .poke-btn:hover {
+            background: #d97706;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Taskmaster Dashboard</h1>
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <span class="refresh-indicator" id="lastUpdate">--</span>
+                <span class="health-badge" id="healthBadge">LOADING</span>
+            </div>
+        </header>
+
+        <div id="errorBox" class="error-message" style="display: none;"></div>
+
+        <div class="summary" id="summary">
+            <div class="stat">
+                <div class="stat-value" id="totalComponents">-</div>
+                <div class="stat-label">Components</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="healthyCount">-</div>
+                <div class="stat-label">Healthy</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="checksCount">-</div>
+                <div class="stat-label">Checks</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="pokesCount">-</div>
+                <div class="stat-label">Pokes Sent</div>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Components</h2>
+                <div id="componentsList">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Recent Activity</h2>
+                <div id="activityList">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Alerts</h2>
+                <div id="alertsList">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Manual Interventions</h2>
+                <div class="actions">
+                    <button onclick="forceEvolution()" id="btnEvolution">Force Evolution</button>
+                    <button onclick="forceCrucible()" id="btnCrucible">Force Crucible Check</button>
+                </div>
+                <div id="actionResult" style="margin-top: 15px; font-size: 14px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/taskmaster';
+        let refreshInterval = null;
+
+        // Format timestamp to readable time
+        function formatTime(isoString) {
+            if (!isoString) return '--';
+            const d = new Date(isoString);
+            return d.toLocaleTimeString();
+        }
+
+        // Format seconds to human readable
+        function formatDuration(seconds) {
+            if (!seconds || seconds === 0) return '--';
+            if (seconds < 60) return `${Math.round(seconds)}s ago`;
+            if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+            return `${Math.round(seconds / 3600)}h ago`;
+        }
+
+        // Update health badge
+        function updateHealthBadge(status) {
+            const badge = document.getElementById('healthBadge');
+            badge.textContent = status.toUpperCase();
+            badge.className = `health-badge health-${status}`;
+        }
+
+        // Show error
+        function showError(message) {
+            const box = document.getElementById('errorBox');
+            box.textContent = message;
+            box.style.display = 'block';
+        }
+
+        // Hide error
+        function hideError() {
+            document.getElementById('errorBox').style.display = 'none';
+        }
+
+        // Fetch health data
+        async function fetchHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                hideError();
+                updateHealthBadge(data.status);
+
+                // Update summary stats
+                document.getElementById('totalComponents').textContent = data.summary.total_components;
+                document.getElementById('healthyCount').textContent = data.summary.healthy;
+                document.getElementById('checksCount').textContent = data.summary.checks_performed;
+                document.getElementById('pokesCount').textContent = data.summary.pokes_sent;
+
+                // Update components list
+                const componentsList = document.getElementById('componentsList');
+                if (Object.keys(data.components).length === 0) {
+                    componentsList.innerHTML = '<div class="no-data">No components registered</div>';
+                } else {
+                    componentsList.innerHTML = Object.entries(data.components).map(([id, comp]) => `
+                        <div class="component">
+                            <div>
+                                <div class="component-name">${comp.name}</div>
+                                <div class="component-meta">
+                                    Last active: ${formatDuration(comp.time_since_active)}
+                                    ${comp.poke_count > 0 ? ` | Pokes: ${comp.poke_count}` : ''}
+                                </div>
+                            </div>
+                            <div>
+                                <span class="status-badge status-${comp.status}">${comp.status}</span>
+                                ${comp.status === 'stalled' ? `<button class="poke-btn" onclick="pokeComponent('${id}')">Poke</button>` : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                document.getElementById('lastUpdate').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+
+            } catch (err) {
+                showError(`Failed to fetch health: ${err.message}`);
+                updateHealthBadge('critical');
+            }
+        }
+
+        // Fetch activity
+        async function fetchActivity() {
+            try {
+                const response = await fetch(`${API_BASE}/activity?limit=10`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                const list = document.getElementById('activityList');
+                if (data.activity.length === 0) {
+                    list.innerHTML = '<div class="no-data">No recent activity</div>';
+                } else {
+                    list.innerHTML = data.activity.map(entry => `
+                        <div class="activity-entry level-${entry.level}">
+                            <span class="activity-time">${formatTime(entry.timestamp)}</span>
+                            <span class="activity-component">${entry.component_id}</span>
+                            <span>${entry.action}: ${entry.details}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (err) {
+                document.getElementById('activityList').innerHTML =
+                    `<div class="no-data">Error loading activity</div>`;
+            }
+        }
+
+        // Fetch alerts
+        async function fetchAlerts() {
+            try {
+                const response = await fetch(`${API_BASE}/alerts`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                const list = document.getElementById('alertsList');
+                if (data.alerts.length === 0) {
+                    list.innerHTML = '<div class="no-data">No active alerts</div>';
+                } else {
+                    list.innerHTML = data.alerts.map(alert => `
+                        <div class="activity-entry level-${alert.level}">
+                            <span class="activity-time">${formatTime(alert.timestamp)}</span>
+                            <span class="activity-component">${alert.component_id}</span>
+                            <span>${alert.details}</span>
+                        </div>
+                    `).join('');
+                }
+            } catch (err) {
+                document.getElementById('alertsList').innerHTML =
+                    `<div class="no-data">Error loading alerts</div>`;
+            }
+        }
+
+        // Poke a component
+        async function pokeComponent(componentId) {
+            try {
+                const response = await fetch(`${API_BASE}/poke/${componentId}`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showActionResult(`Poked ${componentId}`, 'success');
+                } else {
+                    showActionResult(data.detail || 'Poke failed', 'error');
+                }
+
+                // Refresh data
+                refreshAll();
+            } catch (err) {
+                showActionResult(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        // Force evolution
+        async function forceEvolution() {
+            const btn = document.getElementById('btnEvolution');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+
+            try {
+                const response = await fetch(`${API_BASE}/force/evolution`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showActionResult('Evolution cycle triggered', 'success');
+                } else {
+                    showActionResult(data.detail || 'Evolution failed', 'error');
+                }
+            } catch (err) {
+                showActionResult(`Error: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Force Evolution';
+                refreshAll();
+            }
+        }
+
+        // Force crucible check
+        async function forceCrucible() {
+            const btn = document.getElementById('btnCrucible');
+            btn.disabled = true;
+            btn.textContent = 'Running...';
+
+            try {
+                const response = await fetch(`${API_BASE}/force/crucible`, { method: 'POST' });
+                const data = await response.json();
+
+                if (response.ok) {
+                    showActionResult('Crucible check complete', 'success');
+                } else {
+                    showActionResult(data.detail || 'Crucible check failed', 'error');
+                }
+            } catch (err) {
+                showActionResult(`Error: ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Force Crucible Check';
+                refreshAll();
+            }
+        }
+
+        // Show action result
+        function showActionResult(message, type) {
+            const el = document.getElementById('actionResult');
+            el.textContent = message;
+            el.style.color = type === 'success' ? '#10b981' : '#ef4444';
+
+            setTimeout(() => {
+                el.textContent = '';
+            }, 5000);
+        }
+
+        // Refresh all data
+        function refreshAll() {
+            fetchHealth();
+            fetchActivity();
+            fetchAlerts();
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            refreshAll();
+
+            // Auto-refresh every 5 seconds
+            refreshInterval = setInterval(refreshAll, 5000);
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (refreshInterval) clearInterval(refreshInterval);
+        });
+    </script>
+</body>
+</html>

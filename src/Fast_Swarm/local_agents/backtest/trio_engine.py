@@ -57,6 +57,9 @@ class TrioPosition:
     # For performance tracking
     trades: list[dict] = field(default_factory=list)
 
+    # Trailing stop tracking (highwater mark for profit-only trailing)
+    highwater_price: float = 0.0  # Highest price seen since entry
+
 
 @dataclass
 class TrioTradeRecord:
@@ -121,11 +124,23 @@ class TrioBacktestEngine:
         patterns: dict[str, dict],
         slippage_pct: float = 0.1,  # 0.1% slippage per trade
         fee_pct: float = 0.1,  # 0.1% fee per trade
+        use_bear_protection: bool = True,
     ):
         self.pattern_matcher = pattern_matcher
         self.patterns = patterns
         self.slippage_pct = slippage_pct
         self.fee_pct = fee_pct
+
+        # Bear protection service (optional)
+        self.bear_protection_service = None
+        if use_bear_protection:
+            try:
+                from Fast_Swarm.Infrastructure.Services.bear_protection_service import (
+                    BearProtectionService,
+                )
+                self.bear_protection_service = BearProtectionService()
+            except ImportError:
+                pass  # Bear protection not available
 
     def run(
         self,
@@ -185,7 +200,9 @@ class TrioBacktestEngine:
             if signal_type == "entry":
                 triggered, confidence, pattern_id = self._check_entry(agent, indicators)
             else:
-                triggered, confidence, pattern_id = self._check_exit(agent, indicators)
+                triggered, confidence, pattern_id = self._check_exit(
+                    agent, indicators, position, bundle.timestamp
+                )
 
             if triggered:
                 # Execute the trade
@@ -268,24 +285,152 @@ class TrioBacktestEngine:
 
         return False, 0.0, None
 
-    def _check_exit(self, agent, indicators: dict) -> tuple[bool, float, str | None]:
-        """Check if any pattern triggers an exit signal."""
-        # For now, use inverse of entry logic
-        # TODO: Add proper exit condition evaluation
-        best_confidence = 0.0
-        best_pattern = None
+    def _check_exit(
+        self,
+        agent,
+        indicators: dict,
+        position: TrioPosition,
+        timestamp: int = 0,
+    ) -> tuple[bool, float, str | None]:
+        """
+        Comprehensive exit check - collects ALL triggered exits, returns MOST PROFITABLE.
 
+        Exit Types (all evaluated):
+        - Bear Protection VETO (force all exits in crisis)
+        - Stop Loss (capital preservation)
+        - Take Profit (lock gains)
+        - Trailing Stop (protect unrealized gains, profit-only mode)
+        - Pattern-based indicator exits
+
+        Priority: When multiple exits trigger simultaneously, choose the one
+        that results in the best outcome (most profitable exit wins).
+        Bear Protection VETO always wins (uses infinity value).
+        """
+        # Skip if holding USD (no position to exit)
+        if position.holding == Holding.USD:
+            return False, 0.0, None
+
+        current_price = indicators.get("close", 0)
+        entry_price = position.entry_price
+
+        if entry_price <= 0 or current_price <= 0:
+            return False, 0.0, None
+
+        # Calculate P&L percentage
+        pnl_pct = (current_price - entry_price) / entry_price
+
+        # Collect all triggered exits with their "value" (higher = better exit)
+        # Format: (value, confidence, reason)
+        triggered_exits: list[tuple[float, float, str]] = []
+
+        # =========================================================
+        # 1. BEAR PROTECTION VETO (Supreme Risk Layer - FORCE ALL)
+        # =========================================================
+        if self.bear_protection_service:
+            try:
+                regime_state = self.bear_protection_service.evaluate_regime(
+                    velocity=indicators.get("price_velocity", 0),
+                    acceleration=indicators.get("price_acceleration", 0),
+                    adx_jerk=indicators.get("adx_jerk", 0),
+                )
+                if regime_state and regime_state.exit_signal_active:
+                    # VETO = force exit regardless of P&L (capital preservation supreme)
+                    triggered_exits.append((float("inf"), 1.0, "bear_protection_veto"))
+            except Exception:
+                pass  # Bear protection evaluation failed, continue without it
+
+        # =========================================================
+        # 2. STOP LOSS (Capital Preservation)
+        # =========================================================
         for pattern_id in agent.pattern_ids:
             pattern = self.patterns.get(pattern_id)
             if not pattern:
                 continue
-
             exit_conditions = pattern.get("exit_conditions", {})
+            sl_pct = exit_conditions.get("stop_loss_pct", 0.05)  # Default 5%
+            if pnl_pct <= -sl_pct:
+                # Value = how much loss we're limiting (less negative = better)
+                triggered_exits.append((pnl_pct, 1.0, "stop_loss"))
+                break  # Only need one SL trigger
 
-            # Check take profit based on position P&L
-            # This is simplified - real implementation would track position P&L
+        # =========================================================
+        # 3. TAKE PROFIT (Lock Gains)
+        # =========================================================
+        for pattern_id in agent.pattern_ids:
+            pattern = self.patterns.get(pattern_id)
+            if not pattern:
+                continue
+            exit_conditions = pattern.get("exit_conditions", {})
+            tp_pct = exit_conditions.get("take_profit_pct", 0.15)  # Default 15%
+            if pnl_pct >= tp_pct:
+                # Value = profit captured (higher = better)
+                triggered_exits.append((pnl_pct, 1.0, "take_profit"))
+                break  # Only need one TP trigger
 
-        return False, 0.0, None
+        # =========================================================
+        # 4. TRAILING STOP (Volatility-Adjusted via ATR)
+        # =========================================================
+        highwater = position.highwater_price
+        if highwater <= 0:
+            highwater = entry_price
+
+        # Update highwater mark
+        if current_price > highwater:
+            position.highwater_price = current_price
+            highwater = current_price
+
+        # Calculate profit from entry to highwater
+        if highwater > entry_price:
+            profit_pct_from_entry = ((highwater - entry_price) / entry_price) * 100  # as %
+
+            # Only activate trailing stop after minimum profit (profit-only mode)
+            min_profit_to_trail = 2.0  # 2% profit before trailing kicks in
+            if profit_pct_from_entry >= min_profit_to_trail:
+                # Use volatility-adjusted trailing via ATR
+                atr_value = indicators.get("atr_14", 0)
+                if atr_value > 0:
+                    # ATR-based trailing: stop at highwater - (ATR * multiplier)
+                    # Higher ATR = wider stop to avoid noise-triggered exits
+                    atr_multiplier = 2.0  # Standard ATR trailing multiplier
+                    stop_price = highwater - (atr_value * atr_multiplier)
+                    if current_price <= stop_price:
+                        # Value = current P&L (we're locking in this profit)
+                        triggered_exits.append((pnl_pct, 1.0, "atr_trailing_stop"))
+                else:
+                    # Fallback to fixed 3% trailing if no ATR available
+                    trailing_pct = agent.traits.get("trailing_stop_pct", 0.03)
+                    drawdown_from_peak = (highwater - current_price) / highwater
+                    if drawdown_from_peak >= trailing_pct:
+                        triggered_exits.append((pnl_pct, 1.0, "trailing_stop"))
+
+        # =========================================================
+        # 5. PATTERN-BASED INDICATOR EXITS
+        # =========================================================
+        best_pattern_confidence = 0.0
+        for pattern_id in agent.pattern_ids:
+            pattern = self.patterns.get(pattern_id)
+            if not pattern:
+                continue
+            exit_indicator_conditions = pattern.get("exit_conditions", {}).get("conditions", [])
+            if exit_indicator_conditions:
+                matched, confidence = self._evaluate_conditions(exit_indicator_conditions, indicators)
+                if matched and confidence > best_pattern_confidence:
+                    best_pattern_confidence = confidence
+
+        if best_pattern_confidence >= agent.traits.get("exit_threshold", 0.5):
+            triggered_exits.append((pnl_pct, best_pattern_confidence, "pattern_exit"))
+
+        # =========================================================
+        # SELECT BEST EXIT (Most Profitable Wins)
+        # =========================================================
+        if not triggered_exits:
+            return False, 0.0, None
+
+        # Sort by value (highest first) - bear protection VETO always wins (inf value)
+        triggered_exits.sort(key=lambda x: x[0], reverse=True)
+        best_value, best_confidence, best_reason = triggered_exits[0]
+
+        return True, best_confidence, best_reason
 
     def _evaluate_conditions(
         self,
@@ -309,8 +454,8 @@ class TrioBacktestEngine:
             value = cond.get("value")
 
             actual = indicators.get(indicator)
-            if actual is None:
-                continue
+            if actual is None or value is None:
+                continue  # Skip conditions with missing data
 
             matched = False
             if (
